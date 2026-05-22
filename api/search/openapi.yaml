@@ -1,0 +1,240 @@
+openapi: 3.0.3
+info:
+  title: NimoOS-Search API
+  version: 0.1.0
+  description: Retrieval API for NimoOS RAG layer. See design spec 2026-05-22-nimoos-search-design.md
+servers:
+  - url: http://localhost/v1/search
+paths:
+  /text:
+    post:
+      operationId: searchText
+      summary: Text retrieval (BGE-M3 dense + sparse + rerank)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SearchRequest' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /file:
+    get:
+      operationId: searchFile
+      summary: List all chunks of a file (paginated)
+      parameters:
+        - { name: file_id, in: query, required: true, schema: { type: string } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FileChunksResponse' } } } }
+        '404': { description: Not Found (not authorized OR not indexed) }
+  /chunk:
+    get:
+      operationId: searchChunk
+      summary: Fetch anchor chunk plus neighbor window
+      parameters:
+        - { name: file_id, in: query, required: true, schema: { type: string } }
+        - { name: kind, in: query, required: true, schema: { type: string, enum: [body, ocr, caption, transcript, summary] } }
+        - { name: chunk_no, in: query, required: true, schema: { type: integer } }
+        - { name: window, in: query, required: false, schema: { type: integer, default: 2, maximum: 5 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ChunkContextResponse' } } } }
+        '404': { description: Not Found }
+  /visual:
+    post:
+      operationId: searchVisual
+      summary: Visual retrieval (NOT YET IMPLEMENTED in MVP — returns 503)
+      responses:
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /hybrid:
+    post:
+      operationId: searchHybrid
+      summary: Hybrid retrieval (NOT YET IMPLEMENTED in MVP — returns 503)
+      responses:
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /thumb/{file_id}:
+    get:
+      operationId: searchThumb
+      summary: Thumbnail (NOT YET IMPLEMENTED in MVP — returns 404)
+      parameters:
+        - { name: file_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '404': { description: Not Implemented in MVP }
+  /agent/tools:
+    get:
+      operationId: agentTools
+      summary: Return OpenAI function-calling schema for agent tools
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AgentToolsResponse' } } } }
+  /agent/tool:
+    post:
+      operationId: agentToolInvoke
+      summary: Unified tool dispatch (nimoos_search / read_file_chunk)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentInvocation' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /agent/filters-schema:
+    get:
+      operationId: agentFiltersSchema
+      summary: Filter field documentation for the agent
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+  /_internal/health:
+    get:
+      operationId: internalHealth
+      summary: Upstream connectivity check (localhost-only)
+      responses:
+        '200': { description: OK }
+  /_internal/stats:
+    get:
+      operationId: internalStats
+      summary: KPI snapshot (localhost-only)
+      responses:
+        '200': { description: OK }
+  /_internal/warm:
+    post:
+      operationId: internalWarm
+      summary: Warm up BGE-M3 + cache
+      responses:
+        '200': { description: OK }
+components:
+  schemas:
+    Filters:
+      type: object
+      properties:
+        root_ids: { type: array, items: { type: string } }
+        mime_prefix: { type: array, items: { type: string } }
+        kind_in: { type: array, items: { type: string } }
+        lang_in: { type: array, items: { type: string } }
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string }
+        filters: { $ref: '#/components/schemas/Filters' }
+        top_k: { type: integer, default: 20, maximum: 100 }
+        rerank: { type: boolean, default: true }
+        include_neighbors: { type: boolean, default: false }
+    Cite:
+      type: object
+      properties:
+        page: { type: integer, nullable: true }
+        offset_start: { type: integer, nullable: true }
+        offset_end: { type: integer, nullable: true }
+        frame_ms_start: { type: integer, nullable: true }
+        frame_ms_end: { type: integer, nullable: true }
+        chunk_no: { type: integer }
+    Hit:
+      type: object
+      properties:
+        score: { type: number }
+        raw_score: { type: number }
+        collection: { type: string }
+        file_id: { type: string }
+        paths:
+          type: array
+          items:
+            type: object
+            properties:
+              root_id: { type: string }
+              path: { type: string }
+        mime: { type: string }
+        kind: { type: string }
+        cite: { $ref: '#/components/schemas/Cite' }
+        preview:
+          type: object
+          properties:
+            text: { type: string, nullable: true }
+            thumbnail_url: { type: string, nullable: true }
+        payload_extra: { type: object }
+    SearchResponse:
+      type: object
+      properties:
+        hits:
+          type: array
+          items: { $ref: '#/components/schemas/Hit' }
+        stats:
+          type: object
+          properties:
+            total_candidates: { type: integer }
+            rerank_ms: { type: integer }
+            embed_ms: { type: integer }
+            vector_search_ms: { type: integer }
+            expand_ms: { type: integer }
+        warnings:
+          type: array
+          items: { type: string }
+    FileChunksResponse:
+      type: object
+      properties:
+        file_id: { type: string }
+        chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string }
+              chunk_no: { type: integer }
+              text: { type: string }
+              page: { type: integer, nullable: true }
+              offset_start: { type: integer, nullable: true }
+              offset_end: { type: integer, nullable: true }
+              frame_ms_start: { type: integer, nullable: true }
+              frame_ms_end: { type: integer, nullable: true }
+        offset: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+    ChunkContextResponse:
+      type: object
+      properties:
+        file_id: { type: string }
+        kind: { type: string }
+        anchor_chunk_no: { type: integer }
+        chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              chunk_no: { type: integer }
+              text: { type: string }
+              page: { type: integer, nullable: true }
+              offset_start: { type: integer, nullable: true }
+              offset_end: { type: integer, nullable: true }
+    AgentToolsResponse:
+      type: object
+      properties:
+        tools:
+          type: array
+          items: { type: object }
+    AgentInvocation:
+      type: object
+      required: [name, arguments]
+      properties:
+        name: { type: string }
+        arguments: { type: object }
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+    ServiceUnavailable:
+      description: Upstream unavailable / not implemented
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              detail: { type: string, nullable: true }
+              retry_after: { type: integer, nullable: true }
