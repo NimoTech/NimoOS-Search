@@ -1,0 +1,7 @@
+nimoos-search
+*.test
+*.out
+coverage.txt
+.idea/
+.vscode/
+*.swp
