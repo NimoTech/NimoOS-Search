@@ -92,6 +92,9 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	if candidates < topK {
 		candidates = topK
 	}
+	if req.Filters == nil {
+		req.Filters = &Filters{}
+	}
 	warnings := []string{}
 	stats := SearchStats{}
 
