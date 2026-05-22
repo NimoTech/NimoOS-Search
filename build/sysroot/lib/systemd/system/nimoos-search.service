@@ -1,0 +1,21 @@
+[Unit]
+Description=NimoOS Search
+Documentation=https://github.com/NimoTech/NimoOS-Search
+After=qdrant.service nimoos-parser.service nimoos-wiki.service nimoos-gateway.service nimoos-message-bus.service
+Wants=nimoos-parser.service
+
+[Service]
+Type=notify
+User=root
+Group=root
+ExecStart=/usr/bin/nimoos-search -c /etc/nimoos/search.conf
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=10
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nimoos-search
+
+[Install]
+WantedBy=multi-user.target
