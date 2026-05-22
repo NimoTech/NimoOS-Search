@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/NimoTech/NimoOS-Search/service"
@@ -48,7 +49,7 @@ func postSearchText(d *Deps) echo.HandlerFunc {
 		})
 		if err != nil {
 			switch {
-			case errorsIs(err, service.ErrEmbedderUnavailable):
+			case errors.Is(err, service.ErrEmbedderUnavailable):
 				return c.JSON(http.StatusServiceUnavailable, map[string]any{
 					"error": "embedder unavailable", "retry_after": 5,
 				})
@@ -58,20 +59,4 @@ func postSearchText(d *Deps) echo.HandlerFunc {
 		}
 		return c.JSON(http.StatusOK, resp)
 	}
-}
-
-// errorsIs is a tiny helper to avoid pulling errors.Is everywhere in handlers
-func errorsIs(err, target error) bool {
-	for err != nil {
-		if err == target {
-			return true
-		}
-		type wrap interface{ Unwrap() error }
-		if w, ok := err.(wrap); ok {
-			err = w.Unwrap()
-			continue
-		}
-		return false
-	}
-	return false
 }
