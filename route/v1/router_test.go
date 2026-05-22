@@ -11,7 +11,7 @@ import (
 
 func TestHealthz(t *testing.T) {
 	e := echo.New()
-	NewRouter(e)
+	e.GET("/healthz", Healthz)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
