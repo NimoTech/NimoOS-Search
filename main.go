@@ -61,8 +61,9 @@ func main() {
 			newAuthzService,
 			newAgentTools,
 			newEcho,
+			newEventBus,
 		),
-		fx.Invoke(registerRoutes, startListener),
+		fx.Invoke(registerRoutes, startListener, func(*service.EventBus) {}),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -143,6 +144,28 @@ func newEcho() *echo.Echo {
 	e.HideBanner = true
 	e.Use(v1.InjectUserID)
 	return e
+}
+
+func newEventBus(cfg config.Config, lc fx.Lifecycle) *service.EventBus {
+	eb := service.NewEventBus(cfg.MessageBusSocket)
+	stop := make(chan struct{})
+	go func() {
+		t := time.NewTicker(60 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				eb.PublishStatsSnapshot()
+			}
+		}
+	}()
+	lc.Append(fx.Hook{OnStop: func(ctx context.Context) error {
+		close(stop)
+		return nil
+	}})
+	return eb
 }
 
 func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzService,
