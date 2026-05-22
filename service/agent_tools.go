@@ -5,298 +5,175 @@ import (
 	"errors"
 )
 
-// AgentTools exposes LLM-callable tools for NimoOS-Search.
-// T17 adds schema methods; T18 adds Invoke.
+// AgentTools generates the OpenAI function-calling schema served at
+// /v1/search/agent/tools and dispatches /v1/search/agent/tool invocations.
 type AgentTools struct {
 	Search *SearchService
 	Authz  *AuthzService
 }
 
-// ToolsSchema returns the JSON-serialisable schema advertised to the LLM agent.
-// The shape is {"tools": [...]}, where each entry is an OpenAI-style function
-// tool descriptor.
 func (a *AgentTools) ToolsSchema() map[string]any {
-	return map[string]any{
-		"tools": []any{
-			map[string]any{
-				"name":        "nimoos_search",
-				"description": "Full-text + vector hybrid search over files indexed in NimoOS. Returns scored hits with file paths and text previews.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"query": map[string]any{
-							"type":        "string",
-							"description": "Natural-language search query.",
-						},
-						"top_k": map[string]any{
-							"type":        "integer",
-							"description": "Maximum number of hits to return (default 5).",
-						},
-						"filters": map[string]any{
-							"type":        "object",
-							"description": "Optional search filters (root_ids, mime_prefix, kind_in, lang_in).",
-							"properties":  a.FiltersSchema(),
-						},
+	return map[string]any{"tools": []any{
+		map[string]any{
+			"name":        "nimoos_search",
+			"description": "Search the user's personal NAS for relevant content. Use this when the user asks about files, photos, videos, documents, or any past content stored on their NAS.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+					"modality": map[string]any{
+						"type": "string", "enum": []string{"auto", "text"}, "default": "auto",
+						"description": "MVP supports text only.",
 					},
-					"required": []string{"query"},
+					"filters": map[string]any{"type": "object"},
+					"top_k":   map[string]any{"type": "integer", "default": 5, "maximum": 20},
 				},
-			},
-			map[string]any{
-				"name":        "read_file_chunk",
-				"description": "Fetch a specific text chunk from an indexed file by file_id, kind, and chunk_no.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"file_id": map[string]any{
-							"type":        "string",
-							"description": "The file ID returned in a search hit.",
-						},
-						"kind": map[string]any{
-							"type":        "string",
-							"description": "Chunk kind: body, ocr, caption, transcript, or summary.",
-						},
-						"chunk_no": map[string]any{
-							"type":        "integer",
-							"description": "Zero-based chunk index.",
-						},
-						"window": map[string]any{
-							"type":        "integer",
-							"description": "Number of surrounding chunks to include on each side (default 1).",
-						},
-					},
-					"required": []string{"file_id", "kind", "chunk_no"},
-				},
+				"required": []string{"query"},
 			},
 		},
-	}
+		map[string]any{
+			"name":        "read_file_chunk",
+			"description": "Fetch the chunk at (file_id, kind, chunk_no) plus a small window of neighboring chunks.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_id":  map[string]any{"type": "string"},
+					"kind":     map[string]any{"type": "string", "enum": []string{"body", "ocr", "caption", "transcript", "summary"}},
+					"chunk_no": map[string]any{"type": "integer"},
+					"window":   map[string]any{"type": "integer", "default": 2, "maximum": 5},
+				},
+				"required": []string{"file_id", "kind", "chunk_no"},
+			},
+		},
+	}}
 }
 
-// FiltersSchema returns a JSON-schema properties map describing the Filters
-// object, for embedding inside ToolsSchema and for direct exposure on the
-// /v1/agent/filters-schema endpoint.
 func (a *AgentTools) FiltersSchema() map[string]any {
 	return map[string]any{
-		"root_ids": map[string]any{
-			"type":        "array",
-			"items":       map[string]any{"type": "string"},
-			"description": "Restrict results to these storage root IDs.",
-		},
-		"mime_prefix": map[string]any{
-			"type":        "array",
-			"items":       map[string]any{"type": "string"},
-			"description": "Restrict results to MIME types matching these prefixes (e.g. [\"text/\", \"image/\"]).",
-		},
-		"kind_in": map[string]any{
-			"type":        "array",
-			"items":       map[string]any{"type": "string"},
-			"description": "Restrict results to specific chunk kinds (body, ocr, caption, transcript, summary).",
-		},
-		"lang_in": map[string]any{
-			"type":        "array",
-			"items":       map[string]any{"type": "string"},
-			"description": "Restrict results to specific language codes (BCP-47).",
-		},
+		"root_ids":    map[string]any{"type": "string[]", "description": "Restrict to specific Wiki Roots. Intersected with user's allowed roots."},
+		"mime_prefix": map[string]any{"type": "string[]", "description": "Match by MIME prefix, e.g. ['text/markdown']."},
+		"kind_in":     map[string]any{"type": "string[]", "description": "Chunk kind: body, ocr, caption, transcript, summary. MVP only has 'body'."},
+		"lang_in":     map[string]any{"type": "string[]", "description": "ISO lang codes, e.g. ['zh','en']."},
 	}
 }
 
 const (
-	// AgentMaxPaths is the maximum number of file paths included per hit in an
-	// agent response (trimmed to keep context windows small).
-	AgentMaxPaths = 3
-	// AgentMaxPreviewChar is the maximum character length of the preview text
-	// included in an agent response.
+	AgentMaxPaths       = 3
 	AgentMaxPreviewChar = 200
 )
 
-// Invoke dispatches a named tool call with the given args under allowedRoots
-// authz scope and returns a trimmed map suitable for injection into an LLM
-// context window.
-//
-// Supported names: "nimoos_search", "read_file_chunk".
+// Invoke dispatches an agent tool by name. allowedRoots is the result of
+// WikiClient.UserRoots(ctx, user_id) — route handler injects it so the tool
+// invocation itself can't escape root scope.
 func (a *AgentTools) Invoke(ctx context.Context, name string,
 	args map[string]any, allowedRoots []string) (map[string]any, error) {
 	switch name {
 	case "nimoos_search":
-		if a.Search == nil {
-			return nil, errors.New("search service not available")
-		}
 		query, _ := args["query"].(string)
-		if query == "" {
-			return nil, errors.New("nimoos_search: missing required argument 'query'")
+		topK := 5
+		if v, ok := args["top_k"].(float64); ok {
+			topK = int(v)
 		}
-		topK := 0
-		if v, ok := args["top_k"]; ok {
-			switch n := v.(type) {
-			case float64:
-				topK = int(n)
-			case int:
-				topK = n
-			}
+		var f *Filters
+		if rawFilters, ok := args["filters"].(map[string]any); ok && rawFilters != nil {
+			f = parseFiltersMap(rawFilters)
 		}
-
-		// Build filters from args["filters"] if present, then enforce scope.
-		var filters *Filters
-		if fm, ok := args["filters"].(map[string]any); ok {
-			filters = parseFiltersMap(fm)
+		scoped, warn := ApplyScope(f, allowedRoots)
+		if warn == "no_accessible_roots" {
+			return map[string]any{"hits": []any{}, "warnings": []string{warn}}, nil
 		}
-		if filters == nil {
-			filters = &Filters{}
-		}
-		var warning string
-		filters, warning = ApplyScope(filters, allowedRoots)
-		if warning == "no_accessible_roots" {
-			return map[string]any{"hits": []any{}, "warnings": []string{"no_accessible_roots"}}, nil
-		}
-
 		resp, err := a.Search.SearchText(ctx, SearchRequest{
-			Query:   query,
-			Filters: filters,
-			TopK:    topK,
+			Query: query, Filters: scoped, TopK: topK, Rerank: true,
 		})
 		if err != nil {
 			return nil, err
 		}
 		return trimSearchResponseForAgent(resp), nil
-
 	case "read_file_chunk":
-		if a.Authz == nil {
-			return nil, errors.New("authz service not available")
-		}
 		fileID, _ := args["file_id"].(string)
 		kind, _ := args["kind"].(string)
-		if fileID == "" || kind == "" {
-			return nil, errors.New("read_file_chunk: file_id and kind are required")
-		}
 		chunkNo := 0
-		if v, ok := args["chunk_no"]; ok {
-			switch n := v.(type) {
-			case float64:
-				chunkNo = int(n)
-			case int:
-				chunkNo = n
-			}
+		if v, ok := args["chunk_no"].(float64); ok {
+			chunkNo = int(v)
 		}
-		window := 1
-		if v, ok := args["window"]; ok {
-			switch n := v.(type) {
-			case float64:
-				window = int(n)
-			case int:
-				window = n
-			}
+		window := 2
+		if v, ok := args["window"].(float64); ok {
+			window = int(v)
 		}
-		cr, err := a.Authz.GetChunkWindow(ctx, fileID, kind, chunkNo, window, allowedRoots)
+		out, err := a.Authz.GetChunkWindow(ctx, fileID, kind, chunkNo, window, allowedRoots)
 		if err != nil {
 			return nil, err
 		}
-		chunks := make([]any, 0, len(cr.Chunks))
-		for _, c := range cr.Chunks {
-			text := c.Text
-			if len(text) > AgentMaxPreviewChar {
-				text = text[:AgentMaxPreviewChar]
-			}
-			chunks = append(chunks, map[string]any{
-				"chunk_no": c.ChunkNo,
-				"text":     text,
-			})
-		}
 		return map[string]any{
-			"file_id":         cr.FileID,
-			"kind":            cr.Kind,
-			"anchor_chunk_no": cr.AnchorChunkNo,
-			"chunks":          chunks,
+			"file_id": out.FileID, "kind": out.Kind,
+			"anchor_chunk_no": out.AnchorChunkNo, "chunks": out.Chunks,
 		}, nil
-
-	default:
-		return nil, errors.New("unknown tool: " + name)
 	}
+	return nil, errors.New("unknown tool: " + name)
 }
 
-// parseFiltersMap converts a loosely-typed map (as received from JSON args) to
-// a *Filters struct.
 func parseFiltersMap(m map[string]any) *Filters {
 	f := &Filters{}
-	if v, ok := m["root_ids"]; ok {
-		if arr, ok := v.([]any); ok {
-			for _, e := range arr {
-				if s, ok := e.(string); ok {
-					f.RootIDs = append(f.RootIDs, s)
-				}
+	if a, ok := m["root_ids"].([]any); ok {
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				f.RootIDs = append(f.RootIDs, s)
 			}
 		}
 	}
-	if v, ok := m["mime_prefix"]; ok {
-		if arr, ok := v.([]any); ok {
-			for _, e := range arr {
-				if s, ok := e.(string); ok {
-					f.MimePrefix = append(f.MimePrefix, s)
-				}
+	if a, ok := m["mime_prefix"].([]any); ok {
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				f.MimePrefix = append(f.MimePrefix, s)
 			}
 		}
 	}
-	if v, ok := m["kind_in"]; ok {
-		if arr, ok := v.([]any); ok {
-			for _, e := range arr {
-				if s, ok := e.(string); ok {
-					f.KindIn = append(f.KindIn, s)
-				}
+	if a, ok := m["kind_in"].([]any); ok {
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				f.KindIn = append(f.KindIn, s)
 			}
 		}
 	}
-	if v, ok := m["lang_in"]; ok {
-		if arr, ok := v.([]any); ok {
-			for _, e := range arr {
-				if s, ok := e.(string); ok {
-					f.LangIn = append(f.LangIn, s)
-				}
+	if a, ok := m["lang_in"].([]any); ok {
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				f.LangIn = append(f.LangIn, s)
 			}
 		}
 	}
 	return f
 }
 
-// trimSearchResponseForAgent converts a *SearchResponse into a compact
-// map[string]any with paths trimmed to AgentMaxPaths and preview text trimmed
-// to AgentMaxPreviewChar.
+// trimSearchResponseForAgent caps paths to AgentMaxPaths and preview text
+// to AgentMaxPreviewChar, drops payload_extra entirely. Saves tokens.
 func trimSearchResponseForAgent(r *SearchResponse) map[string]any {
 	hits := make([]any, 0, len(r.Hits))
 	for _, h := range r.Hits {
-		// Trim paths.
 		paths := h.Paths
 		if len(paths) > AgentMaxPaths {
 			paths = paths[:AgentMaxPaths]
 		}
-		pathList := make([]any, 0, len(paths))
-		for _, p := range paths {
-			pathList = append(pathList, map[string]any{
-				"root_id": p.RootID,
-				"path":    p.Path,
-			})
-		}
-
-		// Trim preview text.
-		previewText := ""
+		text := ""
 		if h.Preview.Text != nil {
-			previewText = *h.Preview.Text
+			text = *h.Preview.Text
+			if len(text) > AgentMaxPreviewChar {
+				text = text[:AgentMaxPreviewChar]
+			}
 		}
-		if len(previewText) > AgentMaxPreviewChar {
-			previewText = previewText[:AgentMaxPreviewChar]
-		}
-
 		hits = append(hits, map[string]any{
-			"score":    h.Score,
-			"file_id":  h.FileID,
-			"mime":     h.Mime,
-			"kind":     h.Kind,
-			"chunk_no": h.Cite.ChunkNo,
-			"paths":    pathList,
-			"preview": map[string]any{
-				"text": previewText,
-			},
+			"score":   h.Score,
+			"file_id": h.FileID,
+			"paths":   paths,
+			"mime":    h.Mime,
+			"kind":    h.Kind,
+			"cite":    h.Cite,
+			"preview": map[string]any{"text": text, "thumbnail_url": nil},
 		})
 	}
 	return map[string]any{
 		"hits":     hits,
+		"stats":    r.Stats,
 		"warnings": r.Warnings,
 	}
 }
