@@ -24,176 +24,192 @@ import (
 	"go.uber.org/fx"
 )
 
-func main() {
-	vFlag := flag.Bool("v", false, "print version and exit")
-	cfgPath := flag.String("config", "/etc/nimoos/search.ini", "path to INI config file")
-	flag.Parse()
+var (
+	commit = "private build"
+	date   = "private build"
+)
 
-	if *vFlag {
+func main() {
+	configFlag := flag.String("c", "", "config file path")
+	versionFlag := flag.Bool("v", false, "version")
+	flag.Parse()
+	if *versionFlag {
 		fmt.Printf("v%s\n", common.Version)
 		os.Exit(0)
 	}
+	fmt.Println("git commit:", commit, "build date:", date)
+
+	confPath := *configFlag
+	if confPath == "" {
+		confPath = filepath.Join("/etc/nimoos", common.SearchName+"."+common.SearchConfigType)
+	}
+
+	cfg, err := config.Load(confPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config load:", err)
+		os.Exit(1)
+	}
 
 	app := fx.New(
+		fx.Supply(cfg),
 		fx.Provide(
-			func() (config.Config, error) { return config.Load(*cfgPath) },
-			newEcho,
 			newParserClient,
 			newWikiClient,
 			newQdrantClient,
-			newEmbedCache,
-			newDeps,
+			newCache,
+			newSearchService,
+			newAuthzService,
+			newAgentTools,
+			newEcho,
 		),
-		fx.Invoke(registerRoutes),
-		fx.Invoke(runServer),
+		fx.Invoke(registerRoutes, startListener),
 	)
-	app.Run()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := app.Start(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "fx start:", err)
+		os.Exit(1)
+	}
+	_, _ = daemon.SdNotify(false, daemon.SdNotifyReady)
+
+	// Block on SIGTERM/SIGINT
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	<-sig
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopCancel()
+	_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
+	_ = app.Stop(stopCtx)
 }
 
-// ── providers ────────────────────────────────────────────────────────────────
+// ---- fx providers ----
 
-func newEcho(cfg config.Config) *echo.Echo {
+func newParserClient(cfg config.Config) (*service.ParserClient, error) {
+	base, err := readDiscoveryURL(cfg.ParserDiscoveryPath, "http://127.0.0.1:8283")
+	if err != nil {
+		return nil, err
+	}
+	return service.NewParserClient(base, cfg.ParserTimeoutSec), nil
+}
+
+func newWikiClient(cfg config.Config) (*service.WikiClient, error) {
+	// Per spec §6.1: clients go through Gateway. We resolve via gateway.url.
+	base, err := readDiscoveryURL(cfg.GatewayDiscoveryPath, "http://127.0.0.1")
+	if err != nil {
+		return nil, err
+	}
+	return service.NewWikiClient(base, cfg.WikiTimeoutSec,
+		time.Duration(cfg.UserRootsCacheTTLSec)*time.Second), nil
+}
+
+func newQdrantClient(cfg config.Config, lc fx.Lifecycle) (*service.QdrantClient, error) {
+	host := "127.0.0.1"
+	if u, err := parseHostFromURL(cfg.QdrantURL); err == nil && u != "" {
+		host = u
+	}
+	c, err := service.NewQdrantClient(host, cfg.QdrantGRPCPort)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(ctx context.Context) error { return c.Close() }})
+	return c, nil
+}
+
+func newCache(cfg config.Config) *service.EmbedCache {
+	return service.NewEmbedCache(cfg.EmbedCacheSize, time.Duration(cfg.EmbedCacheTTLSec)*time.Second)
+}
+
+func newSearchService(p *service.ParserClient, q *service.QdrantClient, ca *service.EmbedCache, cfg config.Config) *service.SearchService {
+	return &service.SearchService{
+		Parser: p, Qdrant: q, Cache: ca,
+		ParserVersion:      "parser/0.1.0",
+		DefaultTopK:        cfg.DefaultTopK,
+		RerankerCandidates: cfg.RerankerCandidates,
+	}
+}
+
+func newAuthzService(q *service.QdrantClient) *service.AuthzService {
+	return &service.AuthzService{Qdrant: q}
+}
+
+func newAgentTools(s *service.SearchService, a *service.AuthzService) *service.AgentTools {
+	return &service.AgentTools{Search: s, Authz: a}
+}
+
+func newEcho() *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
-	e.HidePort = true
 	e.Use(v1.InjectUserID)
 	return e
 }
 
-func newParserClient(cfg config.Config) (*service.ParserClient, error) {
-	baseURL, err := readDiscoveryURL(cfg.ParserDiscoveryPath)
-	if err != nil {
-		// Non-fatal at startup: parser may come up after us. Return a client
-		// pointed at a placeholder; requests will fail at call-time.
-		baseURL = "http://127.0.0.1:0"
-	}
-	return service.NewParserClient(baseURL, cfg.ParserTimeoutSec), nil
-}
-
-func newWikiClient(cfg config.Config) (*service.WikiClient, error) {
-	baseURL, err := readDiscoveryURL(cfg.WikiDiscoveryPath)
-	if err != nil {
-		baseURL = "http://127.0.0.1:0"
-	}
-	ttl := time.Duration(cfg.UserRootsCacheTTLSec) * time.Second
-	return service.NewWikiClient(baseURL, cfg.WikiTimeoutSec, ttl), nil
-}
-
-func newQdrantClient(cfg config.Config) (*service.QdrantClient, error) {
-	u, err := nurl.Parse(cfg.QdrantURL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid QdrantURL %q: %w", cfg.QdrantURL, err)
-	}
-	host := u.Hostname()
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	return service.NewQdrantClient(host, cfg.QdrantGRPCPort)
-}
-
-func newEmbedCache(cfg config.Config) *service.EmbedCache {
-	ttl := time.Duration(cfg.EmbedCacheTTLSec) * time.Second
-	return service.NewEmbedCache(cfg.EmbedCacheSize, ttl)
-}
-
-func newDeps(
-	cfg config.Config,
-	parser *service.ParserClient,
-	wiki *service.WikiClient,
-	qdrant *service.QdrantClient,
-	cache *service.EmbedCache,
-) *v1.Deps {
-	svc := &service.SearchService{
-		Parser:             parser,
-		Qdrant:             qdrant,
-		Cache:              cache,
-		DefaultTopK:        cfg.DefaultTopK,
-		RerankerCandidates: cfg.RerankerCandidates,
-	}
-	authz := &service.AuthzService{Qdrant: qdrant}
-	tools := &service.AgentTools{Search: svc, Authz: authz}
-	return &v1.Deps{
-		Search: svc,
-		Authz:  authz,
-		Wiki:   wiki,
-		Tools:  tools,
-	}
-}
-
-// ── invokers ─────────────────────────────────────────────────────────────────
-
-func registerRoutes(e *echo.Echo, d *v1.Deps) {
+func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzService,
+	w *service.WikiClient, t *service.AgentTools) {
+	deps := &v1.Deps{Search: s, Authz: a, Wiki: w, Tools: t}
 	e.GET("/healthz", v1.Healthz)
-	v1.RegisterText(e, d)
-	v1.RegisterFile(e, d)
-	v1.RegisterChunk(e, d)
-	v1.RegisterAgent(e, d)
-	v1.RegisterInternal(e, d)
+	v1.RegisterText(e, deps)
+	v1.RegisterFile(e, deps)
+	v1.RegisterChunk(e, deps)
+	v1.RegisterAgent(e, deps)
 	v1.RegisterStubs(e)
+	v1.RegisterInternal(e, deps)
 }
 
-func runServer(lc fx.Lifecycle, cfg config.Config, e *echo.Echo, qdrant *service.QdrantClient) {
+func startListener(lc fx.Lifecycle, e *echo.Echo, cfg config.Config) error {
+	ln, err := net.Listen("tcp", cfg.BindHost+":0")
+	if err != nil {
+		return err
+	}
+	addr := ln.Addr().String()
+	fmt.Println("search listening on", addr)
+	// Write discovery file
+	urlPath := filepath.Join(cfg.RuntimePath, "search.url")
+	_ = os.MkdirAll(cfg.RuntimePath, 0755)
+	_ = os.WriteFile(urlPath, []byte("http://"+addr+"\n"), 0644)
+	srv := &http.Server{Handler: e}
+	go func() { _ = srv.Serve(ln) }()
 	lc.Append(fx.Hook{
-		OnStart: func(ctx context.Context) error {
-			ln, err := net.Listen("tcp", cfg.BindHost+":0")
-			if err != nil {
-				return fmt.Errorf("nimoos-search: listen: %w", err)
-			}
-			addr := ln.Addr().String()
-
-			// Write discovery file so Gateway and other services can find us.
-			urlFile := filepath.Join(cfg.RuntimePath, "search.url")
-			if err := os.MkdirAll(cfg.RuntimePath, 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(urlFile, []byte("http://"+addr+"\n"), 0o644); err != nil {
-				return err
-			}
-
-			go func() {
-				srv := &http.Server{Handler: e}
-				if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-					fmt.Fprintf(os.Stderr, "nimoos-search: %v\n", err)
-				}
-			}()
-
-			// Notify systemd we are ready (no-op if not running under systemd).
-			daemon.SdNotify(false, daemon.SdNotifyReady)
-			fmt.Printf("nimoos-search v%s listening on %s\n", common.Version, addr)
-			return nil
-		},
 		OnStop: func(ctx context.Context) error {
-			if err := qdrant.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "nimoos-search: qdrant close: %v\n", err)
-			}
-			return nil
+			_ = os.Remove(urlPath)
+			return srv.Shutdown(ctx)
 		},
 	})
-
-	// Handle OS signals for graceful shutdown outside of fx's own signal
-	// handling (fx handles SIGINT/SIGTERM internally; this is belt-and-suspenders).
-	go func() {
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
-		<-ch
-	}()
+	// Gateway registration lands in T23.
+	return nil
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ---- helpers ----
 
-// readDiscoveryURL reads a NimoOS service-discovery file (one URL per line,
-// trailing newline OK) and returns the trimmed URL string.
-func readDiscoveryURL(path string) (string, error) {
+func readDiscoveryURL(path, fallback string) (string, error) {
 	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fallback, nil
+		}
+		return "", err
+	}
+	return string(trimNewline(b)), nil
+}
+
+func trimNewline(b []byte) []byte {
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+// parseHostFromURL extracts host portion of "http://host:port"; returns ""
+// if the URL is malformed (caller falls back).
+func parseHostFromURL(s string) (string, error) {
+	u, err := nurl.Parse(s)
 	if err != nil {
 		return "", err
 	}
-	raw := string(b)
-	for len(raw) > 0 && (raw[len(raw)-1] == '\n' || raw[len(raw)-1] == '\r') {
-		raw = raw[:len(raw)-1]
+	host := u.Hostname()
+	if host == "" {
+		return "", nil
 	}
-	if raw == "" {
-		return "", fmt.Errorf("discovery file %q is empty", path)
-	}
-	return raw, nil
+	return host, nil
 }
