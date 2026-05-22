@@ -1,8 +1,10 @@
 package v1
 
 import (
+	"errors"
 	"net/http"
 
+	"github.com/NimoTech/NimoOS-Search/service"
 	"github.com/labstack/echo/v4"
 )
 
@@ -47,6 +49,9 @@ func postAgentTool(d *Deps) echo.HandlerFunc {
 			}
 		}
 		result, err := d.Tools.Invoke(c.Request().Context(), body.Name, body.Arguments, allowedRoots)
+		if errors.Is(err, service.ErrFileNotInScope) {
+			return echo.NewHTTPError(http.StatusNotFound, "not found")
+		}
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}

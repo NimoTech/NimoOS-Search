@@ -74,6 +74,9 @@ func (a *AgentTools) Invoke(ctx context.Context, name string,
 		if v, ok := args["top_k"].(float64); ok {
 			topK = int(v)
 		}
+		if topK > 20 {
+			topK = 20
+		}
 		var f *Filters
 		if rawFilters, ok := args["filters"].(map[string]any); ok && rawFilters != nil {
 			f = parseFiltersMap(rawFilters)
