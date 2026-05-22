@@ -7,11 +7,11 @@ import (
 )
 
 // Deps holds wired dependencies for v1 routes. Populated by main.go (T22).
-// Tools field is added in T17.
 type Deps struct {
 	Search *service.SearchService
 	Authz  *service.AuthzService
 	Wiki   WikiResolver
+	Tools  *service.AgentTools
 }
 
 // WikiResolver narrows what routes need from WikiClient (testability).
