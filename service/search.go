@@ -112,7 +112,7 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	// 2. Qdrant search
 	t = time.Now()
 	qhits, err := s.Qdrant.SearchTextHybrid(ctx, QdrantSearchRequest{
-		Collection: "text_chunks",
+		Collection: collectionTextChunks,
 		Dense:      emb.Dense,
 		Sparse:     emb.Sparse,
 		Filter: &QdrantFilter{
@@ -238,7 +238,7 @@ func buildHitFromPayload(qh QdrantHit) Hit {
 	return Hit{
 		RawScore:     float64(qh.Score),
 		Score:        float64(qh.Score),
-		Collection:   "text_chunks",
+		Collection:   collectionTextChunks,
 		FileID:       fileID,
 		Mime:         mime,
 		Kind:         kind,

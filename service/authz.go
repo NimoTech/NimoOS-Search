@@ -8,6 +8,11 @@ import (
 
 var ErrFileNotInScope = errors.New("file not in user's accessible roots (or not indexed)")
 
+// collectionTextChunks is the Qdrant collection holding all text-modality chunks
+// (body / ocr / caption / transcript / summary). Centralized here so a rename
+// stays a one-line change.
+const collectionTextChunks = "text_chunks"
+
 type AuthzService struct {
 	Qdrant QdrantAPI
 }
@@ -37,10 +42,13 @@ type FileChunksResponse struct {
 // existence of file_ids).
 func (s *AuthzService) GetFileChunks(ctx context.Context, fileID string,
 	allowedRoots []string, offset, limit int) (*FileChunksResponse, error) {
+	if len(allowedRoots) == 0 {
+		return nil, ErrFileNotInScope
+	}
 	all := []FileChunk{}
 	off := ""
 	for {
-		hits, next, err := s.Qdrant.ScrollByFileID(ctx, "text_chunks", fileID, allowedRoots, 500, off)
+		hits, next, err := s.Qdrant.ScrollByFileID(ctx, collectionTextChunks, fileID, allowedRoots, 500, off)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +102,10 @@ type ChunkContextResponse struct {
 // for the same (file_id, kind). Same authz semantics as GetFileChunks.
 func (s *AuthzService) GetChunkWindow(ctx context.Context, fileID, kind string,
 	chunkNo, window int, allowedRoots []string) (*ChunkContextResponse, error) {
-	hits, _, err := s.Qdrant.ScrollByFileID(ctx, "text_chunks", fileID, allowedRoots, 1000, "")
+	if len(allowedRoots) == 0 {
+		return nil, ErrFileNotInScope
+	}
+	hits, _, err := s.Qdrant.ScrollByFileID(ctx, collectionTextChunks, fileID, allowedRoots, 1000, "")
 	if err != nil {
 		return nil, err
 	}
