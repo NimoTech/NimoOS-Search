@@ -1,0 +1,20 @@
+package v1
+
+import (
+	"context"
+
+	"github.com/NimoTech/NimoOS-Search/service"
+)
+
+// Deps holds wired dependencies for v1 routes. Populated by main.go (T22).
+// Tools field is added in T17.
+type Deps struct {
+	Search *service.SearchService
+	Authz  *service.AuthzService
+	Wiki   WikiResolver
+}
+
+// WikiResolver narrows what routes need from WikiClient (testability).
+type WikiResolver interface {
+	UserRoots(ctx context.Context, userID string) ([]string, error)
+}
