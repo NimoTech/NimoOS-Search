@@ -18,6 +18,7 @@ func main() {
 	e := echo.New()
 	v1.NewRouter(e)
 	if err := http.ListenAndServe("127.0.0.1:0", e); err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "nimoos-search: %v\n", err)
+		os.Exit(1)
 	}
 }
