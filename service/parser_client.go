@@ -123,3 +123,55 @@ func (c *ParserClient) Rerank(ctx context.Context, query string, candidates []Re
 	}
 	return &out, nil
 }
+
+// ---- ExpandFiles (T7) ----
+
+type FilePath struct {
+	RootID  string `json:"root_id"`
+	Path    string `json:"path"`
+	MtimeMs int64  `json:"mtime_ms"`
+}
+
+type FileRecord struct {
+	FileID         string            `json:"file_id"`
+	Paths          []FilePath        `json:"paths"`
+	Mime           string            `json:"mime"`
+	ModalitiesDone map[string]string `json:"modalities_done"`
+	ParserVersion  string            `json:"parser_version"`
+	IndexedAt      int64             `json:"indexed_at"`
+	TombstonedAt   *int64            `json:"tombstoned_at,omitempty"`
+}
+
+type ExpandFilesResult struct {
+	Files   []FileRecord `json:"files"`
+	Missing []string     `json:"missing"`
+}
+
+func (c *ParserClient) ExpandFiles(ctx context.Context, fileIDs []string) (*ExpandFilesResult, error) {
+	if len(fileIDs) == 0 {
+		return &ExpandFilesResult{}, nil
+	}
+	q := ""
+	for i, id := range fileIDs {
+		if i > 0 {
+			q += ","
+		}
+		q += id
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/v1/parser/_internal/files?file_ids="+q, nil)
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrParserUnavailable, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("parser expand_files %d: %s", resp.StatusCode, string(b))
+	}
+	var out ExpandFilesResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

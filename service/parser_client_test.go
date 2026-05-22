@@ -65,3 +65,26 @@ func TestParserRerank_503ReturnsErrUnavailable(t *testing.T) {
 		[]RerankCandidate{{ID: "a", Text: "alpha"}}, nil)
 	require.ErrorIs(t, err, ErrRerankerUnavailable)
 }
+
+func TestParserExpandFiles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/parser/_internal/files", r.URL.Path)
+		require.Contains(t, r.URL.RawQuery, "file_ids=a,b")
+		w.Write([]byte(`{
+			"files": [
+				{"file_id":"a","paths":[{"root_id":"r1","path":"/x.md","mtime_ms":1}],
+				 "mime":"text/markdown","modalities_done":{"text":"bge-m3/v1"},
+				 "parser_version":"parser/0.1.0","indexed_at":100,"tombstoned_at":null}
+			],
+			"missing": ["b"]
+		}`))
+	}))
+	defer srv.Close()
+	c := NewParserClient(srv.URL, 5)
+	out, err := c.ExpandFiles(context.Background(), []string{"a", "b"})
+	require.NoError(t, err)
+	require.Len(t, out.Files, 1)
+	require.Equal(t, "a", out.Files[0].FileID)
+	require.Equal(t, "/x.md", out.Files[0].Paths[0].Path)
+	require.Equal(t, []string{"b"}, out.Missing)
+}
