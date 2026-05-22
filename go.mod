@@ -5,9 +5,11 @@ go 1.21
 require (
 	github.com/deepmap/oapi-codegen v1.12.4
 	github.com/getkin/kin-openapi v0.118.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/labstack/echo/v4 v4.12.0
 	github.com/qdrant/go-client v1.10.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/sync v0.6.0
 	google.golang.org/grpc v1.62.1
 	gopkg.in/ini.v1 v1.67.2
 )
