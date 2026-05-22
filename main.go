@@ -176,7 +176,13 @@ func startListener(lc fx.Lifecycle, e *echo.Echo, cfg config.Config) error {
 			return srv.Shutdown(ctx)
 		},
 	})
-	// Gateway registration lands in T23.
+	// Gateway registration
+	gwBase, gerr := readDiscoveryURL(cfg.GatewayDiscoveryPath, "")
+	if gerr == nil && gwBase != "" {
+		if err := service.RegisterAtGateway(gwBase, "http://"+addr, "/v1/search"); err != nil {
+			fmt.Println("WARN: gateway register failed:", err)
+		}
+	}
 	return nil
 }
 
