@@ -47,7 +47,7 @@ func defaults() Config {
 		QdrantGRPCPort:       6334,
 		ParserDiscoveryPath:  "/var/run/nimoos/parser.url",
 		WikiDiscoveryPath:    "/var/run/nimoos/wiki.url",
-		GatewayDiscoveryPath: "/var/run/nimoos/gateway.url",
+		GatewayDiscoveryPath: "/var/run/nimoos/management.url",
 		MessageBusSocket:     "/var/run/nimoos/message-bus.sock",
 		RuntimePath:          "/var/run/nimoos",
 		DataPath:             "/var/lib/nimoos/search",

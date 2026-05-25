@@ -96,12 +96,11 @@ func newParserClient(cfg config.Config) (*service.ParserClient, error) {
 }
 
 func newWikiClient(cfg config.Config) (*service.WikiClient, error) {
-	// Per spec §6.1: clients go through Gateway. We resolve via gateway.url.
-	base, err := readDiscoveryURL(cfg.GatewayDiscoveryPath, "http://127.0.0.1")
-	if err != nil {
-		return nil, err
-	}
-	return service.NewWikiClient(base, cfg.WikiTimeoutSec,
+	// Per spec §6.1: clients go through the public Gateway (default :80).
+	// cfg.GatewayDiscoveryPath points at the management API (used by
+	// startListener for route registration), not the public proxy, so we
+	// don't read it here.
+	return service.NewWikiClient("http://127.0.0.1", cfg.WikiTimeoutSec,
 		time.Duration(cfg.UserRootsCacheTTLSec)*time.Second), nil
 }
 
