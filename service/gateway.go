@@ -18,7 +18,8 @@ import (
 // Wider prefix registration is acceptable for MVP (gateway forwards the
 // prefix; our stubs respond 503/404 which is the documented behavior).
 func RegisterAtGateway(gatewayBase, ourTarget, prefix string) error {
-	body := map[string]any{"prefix": prefix, "target": ourTarget}
+	// Gateway's model.Route expects {path, target} (see NimoOS-Common/model/gateway.go).
+	body := map[string]any{"path": prefix, "target": ourTarget}
 	buf, _ := json.Marshal(body)
 	hc := &http.Client{Timeout: 5 * time.Second}
 	req, _ := http.NewRequest(http.MethodPost, gatewayBase+"/v1/gateway/routes", bytes.NewReader(buf))

@@ -18,6 +18,6 @@ func TestRegisterAtGateway_PostsExpectedRoutes(t *testing.T) {
 	defer srv.Close()
 	err := RegisterAtGateway(srv.URL, "http://127.0.0.1:12345", "/v1/search")
 	require.NoError(t, err)
-	require.Equal(t, "/v1/search", got["prefix"])
+	require.Equal(t, "/v1/search", got["path"])
 	require.Equal(t, "http://127.0.0.1:12345", got["target"])
 }
