@@ -116,10 +116,11 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 		Dense:      emb.Dense,
 		Sparse:     emb.Sparse,
 		Filter: &QdrantFilter{
-			RootIDsAny: req.Filters.RootIDs,
-			MimePrefix: req.Filters.MimePrefix,
-			KindIn:     req.Filters.KindIn,
-			LangIn:     req.Filters.LangIn,
+			RootIDsAny:   req.Filters.RootIDs,
+			MimePrefix:   req.Filters.MimePrefix,
+			KindIn:       req.Filters.KindIn,
+			LangIn:       req.Filters.LangIn,
+			MtimeAfterMs: req.Filters.MtimeAfterMs,
 		},
 		Limit: candidates,
 	})

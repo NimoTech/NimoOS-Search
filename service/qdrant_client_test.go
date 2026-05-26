@@ -32,3 +32,25 @@ func TestQdrantSearchTextHybrid(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 }
+
+func TestBuildPBFilter_MtimeAfter(t *testing.T) {
+	f := &QdrantFilter{
+		RootIDsAny:   []string{"r1"},
+		MtimeAfterMs: 1750000000000,
+	}
+	pbf := buildPBFilter(f)
+	require.NotNil(t, pbf)
+	foundRange := false
+	for _, c := range pbf.Must {
+		fc := c.GetField()
+		if fc == nil {
+			continue
+		}
+		if r := fc.GetRange(); r != nil && fc.Key == "mtime_ms" {
+			require.NotNil(t, r.Gte)
+			require.Equal(t, float64(1750000000000), *r.Gte)
+			foundRange = true
+		}
+	}
+	require.True(t, foundRange, "expected Range condition on mtime_ms")
+}

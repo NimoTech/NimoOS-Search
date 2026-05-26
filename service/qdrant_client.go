@@ -26,11 +26,12 @@ func NewQdrantClient(host string, grpcPort int) (*QdrantClient, error) {
 func (c *QdrantClient) Close() error { return c.conn.Close() }
 
 type QdrantFilter struct {
-	RootIDsAny []string
-	FileIDsAny []string
-	MimePrefix []string
-	KindIn     []string
-	LangIn     []string
+	RootIDsAny   []string
+	FileIDsAny   []string
+	MimePrefix   []string
+	KindIn       []string
+	LangIn       []string
+	MtimeAfterMs int64
 }
 
 type QdrantHit struct {
@@ -152,6 +153,17 @@ func buildPBFilter(f *QdrantFilter) *pb.Filter {
 	// our chunks use exact mime ("text/markdown", etc.)
 	if len(f.MimePrefix) > 0 {
 		must = append(must, matchKeywordAny("mime", f.MimePrefix))
+	}
+	if f.MtimeAfterMs > 0 {
+		gte := float64(f.MtimeAfterMs)
+		must = append(must, &pb.Condition{
+			ConditionOneOf: &pb.Condition_Field{
+				Field: &pb.FieldCondition{
+					Key:   "mtime_ms",
+					Range: &pb.Range{Gte: &gte},
+				},
+			},
+		})
 	}
 	return &pb.Filter{Must: must}
 }

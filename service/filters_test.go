@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -38,4 +39,11 @@ func TestApplyScope_PartialOverlap(t *testing.T) {
 	out, warn := ApplyScope(in, []string{"r1", "r2"})
 	require.Equal(t, []string{"r1"}, out.RootIDs)
 	require.Equal(t, "", warn)
+}
+
+func TestFilters_MtimeAfterMsField(t *testing.T) {
+	in := []byte(`{"root_ids":["r1"],"mtime_after_ms":1750000000000}`)
+	var f Filters
+	require.NoError(t, json.Unmarshal(in, &f))
+	require.Equal(t, int64(1750000000000), f.MtimeAfterMs)
 }

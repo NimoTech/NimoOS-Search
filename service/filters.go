@@ -2,10 +2,11 @@ package service
 
 // Filters mirrors the JSON shape from OpenAPI components.Filters.
 type Filters struct {
-	RootIDs    []string `json:"root_ids,omitempty"`
-	MimePrefix []string `json:"mime_prefix,omitempty"`
-	KindIn     []string `json:"kind_in,omitempty"`
-	LangIn     []string `json:"lang_in,omitempty"`
+	RootIDs      []string `json:"root_ids,omitempty"`
+	MimePrefix   []string `json:"mime_prefix,omitempty"`
+	KindIn       []string `json:"kind_in,omitempty"`
+	LangIn       []string `json:"lang_in,omitempty"`
+	MtimeAfterMs int64    `json:"mtime_after_ms,omitempty"`
 }
 
 // IntersectRoots returns user-requested ∩ allowed.

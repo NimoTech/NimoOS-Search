@@ -50,10 +50,11 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 
 func (a *AgentTools) FiltersSchema() map[string]any {
 	return map[string]any{
-		"root_ids":    map[string]any{"type": "string[]", "description": "Restrict to specific Wiki Roots. Intersected with user's allowed roots."},
-		"mime_prefix": map[string]any{"type": "string[]", "description": "Match by MIME prefix, e.g. ['text/markdown']."},
-		"kind_in":     map[string]any{"type": "string[]", "description": "Chunk kind: body, ocr, caption, transcript, summary. MVP only has 'body'."},
-		"lang_in":     map[string]any{"type": "string[]", "description": "ISO lang codes, e.g. ['zh','en']."},
+		"root_ids":       map[string]any{"type": "string[]", "description": "Restrict to specific Wiki Roots. Intersected with user's allowed roots."},
+		"mime_prefix":    map[string]any{"type": "string[]", "description": "Match by MIME prefix, e.g. ['text/markdown']."},
+		"kind_in":        map[string]any{"type": "string[]", "description": "Chunk kind: body, ocr, caption, transcript, summary. MVP only has 'body'."},
+		"lang_in":        map[string]any{"type": "string[]", "description": "ISO lang codes, e.g. ['zh','en']."},
+		"mtime_after_ms": map[string]any{"type": "integer", "description": "Unix millisecond timestamp. Only return files modified after this time."},
 	}
 }
 
@@ -144,6 +145,9 @@ func parseFiltersMap(m map[string]any) *Filters {
 				f.LangIn = append(f.LangIn, s)
 			}
 		}
+	}
+	if v, ok := m["mtime_after_ms"].(float64); ok {
+		f.MtimeAfterMs = int64(v)
 	}
 	return f
 }
