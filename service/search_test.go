@@ -146,6 +146,28 @@ func TestSearchText_GroupByFile(t *testing.T) {
 	require.Len(t, resp.Files[1].Chunks, 1)
 }
 
+func TestSearchText_GroupByFileWithoutRerank(t *testing.T) {
+	p := &fakeParser{
+		expandFiles: []FileRecord{
+			{FileID: "fa", Paths: []FilePath{{RootID: "r1", Path: "/a.pdf"}}, Mime: "application/pdf"},
+			{FileID: "fb", Paths: []FilePath{{RootID: "r1", Path: "/b.md"}}, Mime: "text/markdown"},
+		},
+	}
+	q := &fakeQdrant{hits: []QdrantHit{
+		{PointID: "a1", Score: 0.9, Payload: map[string]any{"file_id": "fa", "kind": "body", "chunk_no": int64(1), "text": "a-one"}},
+		{PointID: "b1", Score: 0.7, Payload: map[string]any{"file_id": "fb", "kind": "body", "chunk_no": int64(1), "text": "b-one"}},
+	}}
+	svc := &SearchService{Parser: p, Qdrant: q, Cache: NewEmbedCache(10, time.Hour), ParserVersion: "v", DefaultTopK: 10, RerankerCandidates: 40}
+	resp, err := svc.SearchText(context.Background(), SearchRequest{
+		Query: "hi", Filters: &Filters{RootIDs: []string{"r1"}}, TopK: 5, Rerank: false, GroupByFile: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Files, 2)
+	require.Equal(t, "fa", resp.Files[0].FileID) // raw score 0.9 ranks first
+	require.InDelta(t, 0.9, resp.Files[0].Score, 1e-6)
+	require.Equal(t, "fb", resp.Files[1].FileID)
+}
+
 func TestSearchText_NoGroupingKeepsFlatHits(t *testing.T) {
 	p := &fakeParser{
 		rerankScores: []RerankScore{{ID: "p1", Score: 0.9}, {ID: "p2", Score: 0.3}},

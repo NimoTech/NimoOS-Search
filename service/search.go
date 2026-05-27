@@ -210,14 +210,15 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	if req.GroupByFile {
 		byFile := make(map[string][]Hit)
 		for _, h := range hits {
-			if _, seen := byFile[h.FileID]; !seen {
+			chunks := byFile[h.FileID]
+			if chunks == nil {
 				if len(order) >= topK {
 					continue // already collected top_k files
 				}
 				order = append(order, h.FileID)
 			}
-			if len(byFile[h.FileID]) < maxChunks {
-				byFile[h.FileID] = append(byFile[h.FileID], h)
+			if len(chunks) < maxChunks {
+				byFile[h.FileID] = append(chunks, h)
 			}
 		}
 		flat := make([]Hit, 0, len(hits))
@@ -275,16 +276,19 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 					grp.Chunks = append(grp.Chunks, h)
 				}
 			}
-			if len(grp.Chunks) > 0 {
-				grp.Paths = grp.Chunks[0].Paths
-				grp.Mime = grp.Chunks[0].Mime
-				grp.Kind = grp.Chunks[0].Kind
-				grp.Score = grp.Chunks[0].Score
+			if len(grp.Chunks) == 0 {
+				continue
 			}
+			grp.Paths = grp.Chunks[0].Paths
+			grp.Mime = grp.Chunks[0].Mime
+			grp.Kind = grp.Chunks[0].Kind
+			grp.Score = grp.Chunks[0].Score
 			files = append(files, grp)
 		}
 	}
 
+	// Hits is always populated (even on the grouped path) for backward compatibility;
+	// consumers should prefer Files when present (len > 0).
 	return &SearchResponse{Hits: hits, Files: files, Stats: stats, Warnings: warnings}, nil
 }
 
