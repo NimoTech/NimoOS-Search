@@ -9,10 +9,12 @@ import (
 )
 
 type postSearchTextBody struct {
-	Query   string           `json:"query"`
-	Filters *service.Filters `json:"filters,omitempty"`
-	TopK    int              `json:"top_k,omitempty"`
-	Rerank  *bool            `json:"rerank,omitempty"`
+	Query            string           `json:"query"`
+	Filters          *service.Filters `json:"filters,omitempty"`
+	TopK             int              `json:"top_k,omitempty"`
+	Rerank           *bool            `json:"rerank,omitempty"`
+	GroupByFile      bool             `json:"group_by_file,omitempty"`
+	MaxChunksPerFile int              `json:"max_chunks_per_file,omitempty"`
 }
 
 func RegisterText(e *echo.Echo, d *Deps) {
@@ -46,6 +48,7 @@ func postSearchText(d *Deps) echo.HandlerFunc {
 		}
 		resp, err := d.Search.SearchText(c.Request().Context(), service.SearchRequest{
 			Query: body.Query, Filters: filters, TopK: body.TopK, Rerank: rerank,
+			GroupByFile: body.GroupByFile, MaxChunksPerFile: body.MaxChunksPerFile,
 		})
 		if err != nil {
 			switch {

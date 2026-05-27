@@ -122,6 +122,8 @@ components:
         top_k: { type: integer, default: 20, maximum: 100 }
         rerank: { type: boolean, default: true }
         include_neighbors: { type: boolean, default: false }
+        group_by_file: { type: boolean, default: false }
+        max_chunks_per_file: { type: integer, default: 5, maximum: 20 }
     Cite:
       type: object
       properties:
@@ -160,6 +162,9 @@ components:
         hits:
           type: array
           items: { $ref: '#/components/schemas/Hit' }
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/FileGroup' }
         stats:
           type: object
           properties:
@@ -219,6 +224,23 @@ components:
       properties:
         name: { type: string }
         arguments: { type: object }
+    FileGroup:
+      type: object
+      properties:
+        file_id: { type: string }
+        paths:
+          type: array
+          items:
+            type: object
+            properties:
+              root_id: { type: string }
+              path: { type: string }
+        mime: { type: string }
+        kind: { type: string }
+        score: { type: number }
+        chunks:
+          type: array
+          items: { $ref: '#/components/schemas/Hit' }
   responses:
     BadRequest:
       description: Bad request
