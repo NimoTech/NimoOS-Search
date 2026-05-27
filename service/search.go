@@ -12,6 +12,21 @@ type SearchRequest struct {
 	Filters *Filters `json:"filters,omitempty"`
 	TopK    int      `json:"top_k,omitempty"`
 	Rerank  bool     `json:"rerank,omitempty"`
+	// GroupByFile collapses chunk hits into file-level results: top_k then means
+	// "top K files", each carrying up to MaxChunksPerFile chunks (best first).
+	GroupByFile      bool `json:"group_by_file,omitempty"`
+	MaxChunksPerFile int  `json:"max_chunks_per_file,omitempty"`
+}
+
+// FileGroup is one file-level result produced when GroupByFile is set.
+// Paths/Mime/Kind/Score are taken from the file's best-scoring chunk.
+type FileGroup struct {
+	FileID string     `json:"file_id"`
+	Paths  []FilePath `json:"paths"`
+	Mime   string     `json:"mime"`
+	Kind   string     `json:"kind"`
+	Score  float64    `json:"score"`
+	Chunks []Hit      `json:"chunks"`
 }
 
 type Hit struct {
@@ -52,6 +67,7 @@ type SearchStats struct {
 
 type SearchResponse struct {
 	Hits     []Hit       `json:"hits"`
+	Files    []FileGroup `json:"files,omitempty"`
 	Stats    SearchStats `json:"stats"`
 	Warnings []string    `json:"warnings"`
 }
@@ -88,9 +104,30 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	if topK <= 0 {
 		topK = s.DefaultTopK
 	}
+	maxChunks := req.MaxChunksPerFile
+	if maxChunks <= 0 {
+		maxChunks = 5
+	}
+	if maxChunks > 20 {
+		maxChunks = 20
+	}
 	candidates := s.RerankerCandidates
 	if candidates < topK {
 		candidates = topK
+	}
+	// Grouping by file needs enough chunk candidates to cover top_k files.
+	// Cap the grouping-induced growth: rerank runs over ALL candidates (see the
+	// rerank loop below), so an unbounded topK*maxChunks would blow up latency.
+	// We never SHRINK an operator-configured RerankerCandidates — only bound our
+	// own expansion at 100.
+	if req.GroupByFile {
+		want := topK * maxChunks
+		if want > 100 {
+			want = 100
+		}
+		if want > candidates {
+			candidates = want
+		}
 	}
 	if req.Filters == nil {
 		req.Filters = &Filters{}
@@ -165,9 +202,30 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 		}
 	}
 
-	// 4. Sort by Score desc and truncate to top_k
+	// 4. Sort by Score desc.
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
-	if len(hits) > topK {
+
+	// 4b. Either group into file-level results, or truncate to top_k chunks.
+	var order []string // file IDs in rank order — only populated when grouping
+	if req.GroupByFile {
+		byFile := make(map[string][]Hit)
+		for _, h := range hits {
+			if _, seen := byFile[h.FileID]; !seen {
+				if len(order) >= topK {
+					continue // already collected top_k files
+				}
+				order = append(order, h.FileID)
+			}
+			if len(byFile[h.FileID]) < maxChunks {
+				byFile[h.FileID] = append(byFile[h.FileID], h)
+			}
+		}
+		flat := make([]Hit, 0, len(hits))
+		for _, fid := range order {
+			flat = append(flat, byFile[fid]...)
+		}
+		hits = flat
+	} else if len(hits) > topK {
 		hits = hits[:topK]
 	}
 
@@ -202,7 +260,32 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 		}
 	}
 
-	return &SearchResponse{Hits: hits, Stats: stats, Warnings: warnings}, nil
+	// 6. When grouping, assemble file-level results from the path-expanded hits.
+	//    Full-scan per file (hits is small, ≤100) rather than relying on hits
+	//    staying contiguously ordered by FileID — robust to any future change in
+	//    how path expansion mutates/reorders the slice. Chunks keep score order
+	//    because `hits` is sorted desc and we append in that order.
+	var files []FileGroup
+	if req.GroupByFile {
+		files = make([]FileGroup, 0, len(order))
+		for _, fid := range order {
+			grp := FileGroup{FileID: fid}
+			for _, h := range hits {
+				if h.FileID == fid {
+					grp.Chunks = append(grp.Chunks, h)
+				}
+			}
+			if len(grp.Chunks) > 0 {
+				grp.Paths = grp.Chunks[0].Paths
+				grp.Mime = grp.Chunks[0].Mime
+				grp.Kind = grp.Chunks[0].Kind
+				grp.Score = grp.Chunks[0].Score
+			}
+			files = append(files, grp)
+		}
+	}
+
+	return &SearchResponse{Hits: hits, Files: files, Stats: stats, Warnings: warnings}, nil
 }
 
 // buildHitFromPayload turns a Qdrant hit into a Search Hit with sensible
