@@ -69,10 +69,12 @@ func TestPostAgentTool_MissingUserIDReturns400(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "X-NimoOS-User-ID required")
 }
 
 func TestPostAgentTool_EmptyRootsReturns200WithWarning(t *testing.T) {
 	deps := &Deps{
+		// Search/Authz nil is safe: ApplyScope short-circuits on no_accessible_roots before either is used.
 		Tools: &service.AgentTools{Search: nil, Authz: nil},
 		Wiki:  &stubWiki{roots: nil}, // user known, but no accessible roots
 	}

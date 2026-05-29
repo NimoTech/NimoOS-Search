@@ -10,8 +10,8 @@ const CtxUserIDKey = "nimoos_user_id"
 
 // InjectUserID reads X-NimoOS-User-ID from the request (set by Gateway after
 // JWT verification, or by localhost callers that the Gateway exempts) and
-// stashes it in the Echo context. Endpoints that need authorization (text,
-// file, chunk, agent/tool) check c.Get(CtxUserIDKey) and reject empty.
+// stashes it in the Echo context. Only agent/tool rejects an absent uid with
+// 400; text/file/chunk proceed and yield a no_accessible_roots (empty) result.
 func InjectUserID(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		uid := c.Request().Header.Get("X-NimoOS-User-ID")
