@@ -39,6 +39,14 @@ func postAgentTool(d *Deps) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusBadRequest, "name is required")
 		}
 		uid, _ := c.Get(CtxUserIDKey).(string)
+		if uid == "" {
+			// Header is injected by the Gateway after JWT verification (or the
+			// localhost exemption). Absent here means a wiring bug upstream, not
+			// an end-user state — fail loudly rather than silently returning no
+			// hits. (Empty *roots* for a known user is still a 200 + warning,
+			// produced by ApplyScope below.) See spec 2026-05-29.
+			return echo.NewHTTPError(http.StatusBadRequest, "X-NimoOS-User-ID required")
+		}
 		var allowedRoots []string
 		if d.Wiki != nil {
 			var err error
