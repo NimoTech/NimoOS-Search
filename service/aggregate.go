@@ -20,7 +20,7 @@ type ImageSearcher interface {
 
 type AggregateRequest struct {
 	Query        string
-	Sources      []string // empty = all three
+	Sources      []string // empty → falls back to SettingsStore.DefaultSources
 	Filters      *Filters
 	AllowedRoots []string
 	UserID       string
@@ -57,6 +57,9 @@ func wants(sources []string, name string) bool {
 	return false
 }
 
+// Aggregate fans out to the sources resolved from req.Sources (or DefaultSources
+// when empty) concurrently. A failed source degrades to an empty group plus a
+// warning; it never fails the whole call.
 func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *AggregateResponse {
 	st := a.Settings.Get()
 	sources := req.Sources
