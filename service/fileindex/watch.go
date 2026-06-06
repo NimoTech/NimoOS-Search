@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 
@@ -49,6 +50,11 @@ func (w *Watcher) handleEvent(op fsnotify.Op, name string) {
 		if fi.IsDir() {
 			if !skipDir(filepath.Base(name)) {
 				w.addWatchRecursive(name)
+				// ScanInto skips its own root, so index the new dir itself too.
+				_ = w.idx.Upsert(Record{
+					Path: name, Name: fi.Name(), Root: w.rootOf(name),
+					IsDir: true, MtimeMs: fi.ModTime().UnixMilli(),
+				})
 				_ = w.idx.ScanInto(name) // backfill cp -r / mv / tar x
 			}
 			return
@@ -90,7 +96,7 @@ func trimExt(name string) string {
 
 func (w *Watcher) rootOf(path string) string {
 	for _, r := range w.roots {
-		if path == r || (len(path) > len(r) && path[:len(r)] == r) {
+		if path == r || strings.HasPrefix(path, r+"/") {
 			return r
 		}
 	}

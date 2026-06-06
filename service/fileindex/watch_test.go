@@ -50,3 +50,24 @@ func TestIsWatchLimit(t *testing.T) {
 	require.True(t, isWatchLimit(&os.SyscallError{Err: syscall.ENOSPC}))
 	require.False(t, isWatchLimit(errors.New("other")))
 }
+
+func TestRootOf_SeparatorBoundary(t *testing.T) {
+	w := NewWatcher(nil, []string{"/DATA"})
+	require.Equal(t, "/DATA", w.rootOf("/DATA/x.txt"))
+	require.Equal(t, "/DATA", w.rootOf("/DATA"))
+	require.Equal(t, "", w.rootOf("/DATABASE/x.txt"))
+	require.Equal(t, "", w.rootOf("/DATAfoo"))
+}
+
+func TestHandleEvent_CreateDirIndexesItself(t *testing.T) {
+	root := t.TempDir()
+	d := filepath.Join(root, "newdir")
+	require.NoError(t, os.Mkdir(d, 0755))
+	idx := openTmp(t)
+	w := NewWatcher(idx, []string{root})
+	w.handleEvent(fsnotify.Create, d)
+	hits, err := idx.Search(context.Background(), "newdir", 10)
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	require.True(t, hits[0].IsDir)
+}
