@@ -154,5 +154,9 @@ func (s *SettingsStore) writeFile(in SearchSettings) error {
 	if err := os.WriteFile(tmp, b, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp) // best-effort cleanup
+		return err
+	}
+	return nil
 }

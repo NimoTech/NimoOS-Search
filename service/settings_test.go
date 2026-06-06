@@ -1,7 +1,6 @@
 package service
 
 import (
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -70,15 +69,20 @@ func TestSettingsStore_ApplyPatchOnlyProvided(t *testing.T) {
 func TestSettingsStore_GetNotBlockedByPutIO(t *testing.T) {
 	// Sanity: Put holds the rw lock only briefly; Get during a Put must not deadlock.
 	s, _ := LoadSettingsStore(filepath.Join(t.TempDir(), "s.json"), defaultsForTest())
+	ready := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); _ = s.Get() }()
+		go func() {
+			defer wg.Done()
+			<-ready
+			_ = s.Get()
+		}()
 	}
 	in := s.Get()
 	in.ImageTopK = 7
+	close(ready) // release all Get goroutines, then race them against Put
 	require.NoError(t, s.Put(in))
 	wg.Wait()
 	require.Equal(t, 7, s.Get().ImageTopK)
-	_ = os.Remove
 }
