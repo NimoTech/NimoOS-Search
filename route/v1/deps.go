@@ -4,15 +4,18 @@ import (
 	"context"
 
 	"github.com/NimoTech/NimoOS-Search/service"
+	"github.com/NimoTech/NimoOS-Search/service/fileindex"
 )
 
 // Deps holds wired dependencies for v1 routes. Populated by main.go (T22).
 type Deps struct {
-	Search *service.SearchService
-	Authz  *service.AuthzService
-	Wiki   WikiResolver
-	Tools  *service.AgentTools
-	Photos service.ImageSearcher
+	Search    *service.SearchService
+	Authz     *service.AuthzService
+	Wiki      WikiResolver
+	Tools     *service.AgentTools
+	Photos    service.ImageSearcher
+	Settings  *service.SettingsStore
+	FileIndex *fileindex.Subsystem
 }
 
 // WikiResolver narrows what routes need from WikiClient (testability).
