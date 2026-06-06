@@ -7,6 +7,7 @@ package fileindex
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -130,4 +131,71 @@ func (i *Index) Count(ctx context.Context) (int, error) {
 	var n int
 	err := i.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM file_index`).Scan(&n)
 	return n, err
+}
+
+// Search returns up to topK filename hits ranked by match score then mtime.
+// Candidate retrieval uses FTS5 trigram when available, else a name_lower scan.
+func (i *Index) Search(ctx context.Context, query string, topK int) ([]FileNameHit, error) {
+	terms := tokenize(query)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	rows, err := i.candidateRows(ctx, terms)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hits []FileNameHit
+	for rows.Next() {
+		var h FileNameHit
+		var nameLower string
+		var dir int
+		if err := rows.Scan(&h.Path, &h.Name, &nameLower, &h.Ext, &h.Size, &h.MtimeMs, &dir); err != nil {
+			return nil, err
+		}
+		h.IsDir = dir == 1
+		h.Match = scoreName(nameLower, terms)
+		if h.Match > 0 {
+			hits = append(hits, h)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(hits, func(a, b int) bool {
+		if hits[a].Match != hits[b].Match {
+			return hits[a].Match > hits[b].Match
+		}
+		return hits[a].MtimeMs > hits[b].MtimeMs
+	})
+	if topK > 0 && len(hits) > topK {
+		hits = hits[:topK]
+	}
+	return hits, nil
+}
+
+// candidateRows returns rows whose name matches ANY term (final scoring/AND
+// weighting happens in Go). Selects the same columns regardless of backend.
+func (i *Index) candidateRows(ctx context.Context, terms []string) (*sql.Rows, error) {
+	const cols = `path,name,name_lower,ext,size,mtime_ms,is_dir`
+	if i.ftsOK {
+		// trigram MATCH on any term; OR-join with quoted phrases.
+		var qs []string
+		var args []any
+		for _, t := range terms {
+			qs = append(qs, `"`+strings.ReplaceAll(t, `"`, ``)+`"`)
+		}
+		args = append(args, strings.Join(qs, " OR "))
+		return i.db.QueryContext(ctx,
+			`SELECT f.path,f.name,f.name_lower,f.ext,f.size,f.mtime_ms,f.is_dir FROM file_name_fts m JOIN file_index f ON f.path=m.path WHERE file_name_fts MATCH ?`, args...)
+	}
+	// Fallback: name_lower LIKE for any term.
+	var where []string
+	var args []any
+	for _, t := range terms {
+		where = append(where, `name_lower LIKE '%' || ? || '%'`)
+		args = append(args, t)
+	}
+	return i.db.QueryContext(ctx,
+		`SELECT `+cols+` FROM file_index WHERE `+strings.Join(where, " OR "), args...)
 }
