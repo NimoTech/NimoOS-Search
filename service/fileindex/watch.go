@@ -29,6 +29,10 @@ func NewWatcher(idx *Index, roots []string) *Watcher {
 	return w
 }
 
+// SetOnDegrade sets the callback fired once when the watcher hits the kernel
+// watch limit and degrades to scan-only. Call before Start.
+func (w *Watcher) SetOnDegrade(f func()) { w.onDegrade = f }
+
 func (w *Watcher) Degraded() bool { return w.degraded.Load() }
 
 func isWatchLimit(err error) bool {

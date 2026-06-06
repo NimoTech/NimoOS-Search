@@ -71,3 +71,15 @@ func TestHandleEvent_CreateDirIndexesItself(t *testing.T) {
 	require.Len(t, hits, 1)
 	require.True(t, hits[0].IsDir)
 }
+
+func TestSetOnDegrade_FiresOnLimit(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0755))
+	idx := openTmp(t)
+	w := NewWatcher(idx, []string{root})
+	called := false
+	w.SetOnDegrade(func() { called = true })
+	w.add = func(string) error { return &os.SyscallError{Syscall: "inotify_add_watch", Err: syscall.ENOSPC} }
+	w.addWatchRecursive(root)
+	require.True(t, called, "SetOnDegrade callback fires on watch-limit degrade")
+}

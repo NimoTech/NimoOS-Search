@@ -138,7 +138,7 @@ func newAuthzService(q *service.QdrantClient) *service.AuthzService {
 	return &service.AuthzService{Qdrant: q}
 }
 
-func newFileIndex(cfg config.Config, lc fx.Lifecycle) (*fileindex.Index, error) {
+func newFileIndex(cfg config.Config, eb *service.EventBus, lc fx.Lifecycle) (*fileindex.Index, error) {
 	if !cfg.FileIndexEnabled {
 		return nil, nil
 	}
@@ -149,24 +149,36 @@ func newFileIndex(cfg config.Config, lc fx.Lifecycle) (*fileindex.Index, error) 
 	if err != nil {
 		return nil, err
 	}
+	normal := time.Duration(cfg.FileIndexScanIntervalH) * time.Hour
+	if normal <= 0 {
+		normal = 6 * time.Hour
+	}
+	degraded := time.Duration(cfg.FileIndexDegradedScanIntervalH) * time.Hour
+	if degraded <= 0 {
+		degraded = time.Hour
+	}
 	stop := make(chan struct{})
 	// Background boot scan + watcher + periodic reconcile (does not block readiness).
 	go func() {
 		_ = idx.BootScan(cfg.FileIndexRoots)
 		idx.SetReady()
 		w := fileindex.NewWatcher(idx, cfg.FileIndexRoots)
+		w.SetOnDegrade(func() {
+			eb.PublishWarning("fileindex_watch_degraded",
+				"inotify watch limit reached; falling back to periodic scan. Raise fs.inotify.max_user_watches.")
+		})
 		_ = w.Start(stop)
-		interval := time.Duration(cfg.FileIndexScanIntervalH) * time.Hour
-		if interval <= 0 {
-			interval = 6 * time.Hour
-		}
-		t := time.NewTicker(interval)
-		defer t.Stop()
+		// Reconcile on a shorter interval once the watcher has degraded to
+		// scan-only, so drift is corrected faster without live watches.
 		for {
+			interval := normal
+			if w.Degraded() {
+				interval = degraded
+			}
 			select {
 			case <-stop:
 				return
-			case <-t.C:
+			case <-time.After(interval):
 				for _, r := range cfg.FileIndexRoots {
 					_ = idx.Reconcile(r)
 				}
