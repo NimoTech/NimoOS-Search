@@ -73,9 +73,14 @@ func TestPostAgentTool_MissingUserIDReturns400(t *testing.T) {
 }
 
 func TestPostAgentTool_EmptyRootsReturns200(t *testing.T) {
+	st, err := service.LoadSettingsStore(t.TempDir()+"/s.json", service.SearchSettings{
+		DefaultSources: []string{"semantic", "filenames", "images"},
+		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15,
+	})
+	require.NoError(t, err)
 	deps := &Deps{
 		// Agg with nil Search: Aggregator skips semantic source, returns empty groups, 200 OK.
-		Tools: &service.AgentTools{Agg: &service.Aggregator{}, Authz: nil},
+		Tools: &service.AgentTools{Agg: &service.Aggregator{Settings: st}, Authz: nil},
 		Wiki:  &stubWiki{roots: nil}, // user known, but no accessible roots
 	}
 	e := echo.New()
