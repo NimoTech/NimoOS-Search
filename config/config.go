@@ -29,6 +29,22 @@ type Config struct {
 	RuntimePath string
 	DataPath    string
 	LogPath     string
+
+	// fileindex
+	FileIndexEnabled               bool
+	FileIndexRoots                 []string
+	FileIndexDBPath                string
+	FileIndexScanIntervalH         int
+	FileIndexDegradedScanIntervalH int
+
+	// photos proxy
+	PhotosDiscoveryPath string
+
+	// aggregate
+	AggSemanticTopK    int
+	AggFilenameTopK    int
+	AggImageTopK       int
+	AggMaxTotalResults int
 }
 
 func defaults() Config {
@@ -52,6 +68,16 @@ func defaults() Config {
 		RuntimePath:          "/var/run/nimoos",
 		DataPath:             "/var/lib/nimoos/search",
 		LogPath:              "/var/log/nimoos",
+		FileIndexEnabled:               true,
+		FileIndexRoots:                 []string{"/DATA", "/mnt", "/media"},
+		FileIndexDBPath:                "/var/lib/nimoos/db/search.db",
+		FileIndexScanIntervalH:         6,
+		FileIndexDegradedScanIntervalH: 1,
+		PhotosDiscoveryPath:            "/var/run/nimoos/photos.url",
+		AggSemanticTopK:                5,
+		AggFilenameTopK:                5,
+		AggImageTopK:                   5,
+		AggMaxTotalResults:             15,
 	}
 }
 
@@ -96,6 +122,22 @@ func applyINI(f *ini.File, c *Config) {
 		if k, _ := s.GetKey("DataPath"); k != nil { c.DataPath = k.String() }
 		if k, _ := s.GetKey("LogPath"); k != nil { c.LogPath = k.String() }
 	}
+	if s := f.Section("fileindex"); s != nil {
+		if k, _ := s.GetKey("Enabled"); k != nil { c.FileIndexEnabled, _ = k.Bool() }
+		if k, _ := s.GetKey("Roots"); k != nil { c.FileIndexRoots = k.Strings(",") }
+		if k, _ := s.GetKey("DBPath"); k != nil { c.FileIndexDBPath = k.String() }
+		if k, _ := s.GetKey("ScanIntervalH"); k != nil { c.FileIndexScanIntervalH, _ = k.Int() }
+		if k, _ := s.GetKey("DegradedScanIntervalH"); k != nil { c.FileIndexDegradedScanIntervalH, _ = k.Int() }
+	}
+	if s := f.Section("photos"); s != nil {
+		if k, _ := s.GetKey("DiscoveryPath"); k != nil { c.PhotosDiscoveryPath = k.String() }
+	}
+	if s := f.Section("aggregate"); s != nil {
+		if k, _ := s.GetKey("SemanticTopK"); k != nil { c.AggSemanticTopK, _ = k.Int() }
+		if k, _ := s.GetKey("FilenameTopK"); k != nil { c.AggFilenameTopK, _ = k.Int() }
+		if k, _ := s.GetKey("ImageTopK"); k != nil { c.AggImageTopK, _ = k.Int() }
+		if k, _ := s.GetKey("MaxTotalResults"); k != nil { c.AggMaxTotalResults, _ = k.Int() }
+	}
 }
 
 func applyEnv(c *Config) {
@@ -108,4 +150,6 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("SEARCH_PARSER_DISCOVERY_PATH"); v != "" { c.ParserDiscoveryPath = v }
 	if v := os.Getenv("SEARCH_WIKI_DISCOVERY_PATH"); v != "" { c.WikiDiscoveryPath = v }
 	if v := os.Getenv("SEARCH_GATEWAY_DISCOVERY_PATH"); v != "" { c.GatewayDiscoveryPath = v }
+	if v := os.Getenv("SEARCH_FILEINDEX_ENABLED"); v != "" { c.FileIndexEnabled = v == "1" || v == "true" }
+	if v := os.Getenv("SEARCH_PHOTOS_DISCOVERY_PATH"); v != "" { c.PhotosDiscoveryPath = v }
 }
