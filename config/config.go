@@ -45,6 +45,9 @@ type Config struct {
 	AggFilenameTopK    int
 	AggImageTopK       int
 	AggMaxTotalResults int
+
+	// runtime-mutable settings overlay
+	SettingsPath string
 }
 
 func defaults() Config {
@@ -78,6 +81,7 @@ func defaults() Config {
 		AggFilenameTopK:                5,
 		AggImageTopK:                   5,
 		AggMaxTotalResults:             15,
+		SettingsPath:                   "/var/lib/nimoos/search-settings.json",
 	}
 }
 

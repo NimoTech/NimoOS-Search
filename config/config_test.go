@@ -55,4 +55,5 @@ func TestDefaults_FileIndexAndAggregate(t *testing.T) {
 	require.Equal(t, 5, c.AggFilenameTopK)
 	require.Equal(t, 5, c.AggImageTopK)
 	require.Equal(t, 15, c.AggMaxTotalResults)
+	require.Equal(t, "/var/lib/nimoos/search-settings.json", c.SettingsPath)
 }

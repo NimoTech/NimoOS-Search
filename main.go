@@ -59,6 +59,7 @@ func main() {
 			newQdrantClient,
 			newCache,
 			newSearchService,
+			newSettingsStore,
 			newFileIndex,
 			newPhotosClient,
 			newAggregator,
@@ -138,9 +139,23 @@ func newAuthzService(q *service.QdrantClient) *service.AuthzService {
 	return &service.AuthzService{Qdrant: q}
 }
 
-func newFileIndex(cfg config.Config, eb *service.EventBus, lc fx.Lifecycle) (*fileindex.Index, error) {
-	if !cfg.FileIndexEnabled {
-		return nil, nil
+func newSettingsStore(cfg config.Config) (*service.SettingsStore, error) {
+	return service.LoadSettingsStore(cfg.SettingsPath, service.SearchSettings{
+		DefaultSources:         []string{"semantic", "filenames", "images"},
+		SemanticTopK:           cfg.AggSemanticTopK,
+		FilenameTopK:           cfg.AggFilenameTopK,
+		ImageTopK:              cfg.AggImageTopK,
+		MaxTotalResults:        cfg.AggMaxTotalResults,
+		FileIndexEnabled:       cfg.FileIndexEnabled,
+		FileIndexRoots:         cfg.FileIndexRoots,
+		FileIndexScanIntervalH: cfg.FileIndexScanIntervalH,
+	})
+}
+
+func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.EventBus, lc fx.Lifecycle) (*fileindex.Subsystem, error) {
+	s := st.Get()
+	if !s.FileIndexEnabled {
+		return &fileindex.Subsystem{}, nil // disabled: nil Index → Report()=disabled
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.FileIndexDBPath), 0755); err != nil {
 		return nil, err
@@ -149,7 +164,7 @@ func newFileIndex(cfg config.Config, eb *service.EventBus, lc fx.Lifecycle) (*fi
 	if err != nil {
 		return nil, err
 	}
-	normal := time.Duration(cfg.FileIndexScanIntervalH) * time.Hour
+	normal := time.Duration(s.FileIndexScanIntervalH) * time.Hour
 	if normal <= 0 {
 		normal = 6 * time.Hour
 	}
@@ -157,16 +172,16 @@ func newFileIndex(cfg config.Config, eb *service.EventBus, lc fx.Lifecycle) (*fi
 	if degraded <= 0 {
 		degraded = time.Hour
 	}
+	w := fileindex.NewWatcher(idx, s.FileIndexRoots)
+	w.SetOnDegrade(func() {
+		eb.PublishWarning("fileindex_watch_degraded",
+			"inotify watch limit reached; falling back to periodic scan. Raise fs.inotify.max_user_watches.")
+	})
 	stop := make(chan struct{})
 	// Background boot scan + watcher + periodic reconcile (does not block readiness).
 	go func() {
-		_ = idx.BootScan(cfg.FileIndexRoots)
+		_ = idx.BootScan(s.FileIndexRoots)
 		idx.SetReady()
-		w := fileindex.NewWatcher(idx, cfg.FileIndexRoots)
-		w.SetOnDegrade(func() {
-			eb.PublishWarning("fileindex_watch_degraded",
-				"inotify watch limit reached; falling back to periodic scan. Raise fs.inotify.max_user_watches.")
-		})
 		_ = w.Start(stop)
 		// Reconcile on a shorter interval once the watcher has degraded to
 		// scan-only, so drift is corrected faster without live watches.
@@ -179,7 +194,7 @@ func newFileIndex(cfg config.Config, eb *service.EventBus, lc fx.Lifecycle) (*fi
 			case <-stop:
 				return
 			case <-time.After(interval):
-				for _, r := range cfg.FileIndexRoots {
+				for _, r := range s.FileIndexRoots {
 					_ = idx.Reconcile(r)
 				}
 			}
@@ -189,7 +204,7 @@ func newFileIndex(cfg config.Config, eb *service.EventBus, lc fx.Lifecycle) (*fi
 		close(stop)
 		return idx.Close()
 	}})
-	return idx, nil
+	return &fileindex.Subsystem{Index: idx, Watcher: w, Roots: s.FileIndexRoots}, nil
 }
 
 func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
@@ -201,18 +216,12 @@ func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
 	return service.NewPhotosClient(base, 5), nil
 }
 
-func newAggregator(s *service.SearchService, idx *fileindex.Index, p *service.PhotosClient, cfg config.Config) *service.Aggregator {
-	agg := &service.Aggregator{
-		Search:          s,
-		SemanticTopK:    cfg.AggSemanticTopK,
-		FilenameTopK:    cfg.AggFilenameTopK,
-		ImageTopK:       cfg.AggImageTopK,
-		MaxTotalResults: cfg.AggMaxTotalResults,
-	}
+func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, st *service.SettingsStore) *service.Aggregator {
+	agg := &service.Aggregator{Search: s, Settings: st}
 	// Assign through interfaces only when non-nil, so a nil *T doesn't become a
 	// non-nil interface (Go typed-nil trap) that breaks the `== nil` checks.
-	if idx != nil {
-		agg.FileIndex = idx
+	if sub != nil && sub.Index != nil {
+		agg.FileIndex = sub.Index
 	}
 	if p != nil {
 		agg.Photos = p
@@ -254,8 +263,9 @@ func newEventBus(cfg config.Config, lc fx.Lifecycle) *service.EventBus {
 }
 
 func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzService,
-	w *service.WikiClient, t *service.AgentTools, p *service.PhotosClient) {
-	deps := &v1.Deps{Search: s, Authz: a, Wiki: w, Tools: t}
+	w *service.WikiClient, t *service.AgentTools, p *service.PhotosClient,
+	sub *fileindex.Subsystem, st *service.SettingsStore) {
+	deps := &v1.Deps{Search: s, Authz: a, Wiki: w, Tools: t, Settings: st, FileIndex: sub}
 	if p != nil {
 		deps.Photos = p
 	}
@@ -267,6 +277,7 @@ func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzServ
 	v1.RegisterVisual(e, deps)
 	v1.RegisterStubs(e)
 	v1.RegisterInternal(e, deps)
+	v1.RegisterSettings(e, deps)
 }
 
 func startListener(lc fx.Lifecycle, e *echo.Echo, cfg config.Config) error {
