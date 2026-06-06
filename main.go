@@ -19,6 +19,7 @@ import (
 	"github.com/NimoTech/NimoOS-Search/config"
 	v1 "github.com/NimoTech/NimoOS-Search/route/v1"
 	"github.com/NimoTech/NimoOS-Search/service"
+	"github.com/NimoTech/NimoOS-Search/service/fileindex"
 	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/fx"
@@ -58,6 +59,9 @@ func main() {
 			newQdrantClient,
 			newCache,
 			newSearchService,
+			newFileIndex,
+			newPhotosClient,
+			newAggregator,
 			newAuthzService,
 			newAgentTools,
 			newEcho,
@@ -134,8 +138,78 @@ func newAuthzService(q *service.QdrantClient) *service.AuthzService {
 	return &service.AuthzService{Qdrant: q}
 }
 
-func newAgentTools(s *service.SearchService, a *service.AuthzService) *service.AgentTools {
-	return &service.AgentTools{Search: s, Authz: a}
+func newFileIndex(cfg config.Config, lc fx.Lifecycle) (*fileindex.Index, error) {
+	if !cfg.FileIndexEnabled {
+		return nil, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.FileIndexDBPath), 0755); err != nil {
+		return nil, err
+	}
+	idx, err := fileindex.Open(cfg.FileIndexDBPath)
+	if err != nil {
+		return nil, err
+	}
+	stop := make(chan struct{})
+	// Background boot scan + watcher + periodic reconcile (does not block readiness).
+	go func() {
+		_ = idx.BootScan(cfg.FileIndexRoots)
+		idx.SetReady()
+		w := fileindex.NewWatcher(idx, cfg.FileIndexRoots)
+		_ = w.Start(stop)
+		interval := time.Duration(cfg.FileIndexScanIntervalH) * time.Hour
+		if interval <= 0 {
+			interval = 6 * time.Hour
+		}
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				for _, r := range cfg.FileIndexRoots {
+					_ = idx.Reconcile(r)
+				}
+			}
+		}
+	}()
+	lc.Append(fx.Hook{OnStop: func(ctx context.Context) error {
+		close(stop)
+		return idx.Close()
+	}})
+	return idx, nil
+}
+
+func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
+	base, err := readDiscoveryURL(cfg.PhotosDiscoveryPath, "")
+	if err != nil || base == "" {
+		// Photos not discovered: aggregator/visual degrade (nil client).
+		return nil, nil
+	}
+	return service.NewPhotosClient(base, 5), nil
+}
+
+func newAggregator(s *service.SearchService, idx *fileindex.Index, p *service.PhotosClient, cfg config.Config) *service.Aggregator {
+	agg := &service.Aggregator{
+		Search:          s,
+		SemanticTopK:    cfg.AggSemanticTopK,
+		FilenameTopK:    cfg.AggFilenameTopK,
+		ImageTopK:       cfg.AggImageTopK,
+		MaxTotalResults: cfg.AggMaxTotalResults,
+	}
+	// Assign through interfaces only when non-nil, so a nil *T doesn't become a
+	// non-nil interface (Go typed-nil trap) that breaks the `== nil` checks.
+	if idx != nil {
+		agg.FileIndex = idx
+	}
+	if p != nil {
+		agg.Photos = p
+	}
+	return agg
+}
+
+func newAgentTools(agg *service.Aggregator, a *service.AuthzService) *service.AgentTools {
+	return &service.AgentTools{Agg: agg, Authz: a}
 }
 
 func newEcho() *echo.Echo {
@@ -168,13 +242,17 @@ func newEventBus(cfg config.Config, lc fx.Lifecycle) *service.EventBus {
 }
 
 func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzService,
-	w *service.WikiClient, t *service.AgentTools) {
+	w *service.WikiClient, t *service.AgentTools, p *service.PhotosClient) {
 	deps := &v1.Deps{Search: s, Authz: a, Wiki: w, Tools: t}
+	if p != nil {
+		deps.Photos = p
+	}
 	e.GET("/healthz", v1.Healthz)
 	v1.RegisterText(e, deps)
 	v1.RegisterFile(e, deps)
 	v1.RegisterChunk(e, deps)
 	v1.RegisterAgent(e, deps)
+	v1.RegisterVisual(e, deps)
 	v1.RegisterStubs(e)
 	v1.RegisterInternal(e, deps)
 }
