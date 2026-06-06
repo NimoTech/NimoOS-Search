@@ -45,8 +45,35 @@ paths:
   /visual:
     post:
       operationId: searchVisual
-      summary: Visual retrieval (NOT YET IMPLEMENTED in MVP — returns 503)
+      summary: Image search via Photos service (returns 503 when Photos unavailable)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: Natural-language image search query
+                top_k:
+                  type: integer
+                  default: 20
+                  maximum: 100
+                  description: Maximum number of image hits to return
       responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  images:
+                    type: array
+                    items: { $ref: '#/components/schemas/ImageHit' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /hybrid:
     post:
@@ -241,6 +268,88 @@ components:
         chunks:
           type: array
           items: { $ref: '#/components/schemas/Hit' }
+    ImageHit:
+      type: object
+      description: One image candidate returned by the visual search proxy
+      properties:
+        asset_id:
+          type: string
+          description: Unique identifier in NimoOS-Photos
+        name:
+          type: string
+          description: Original filename of the image
+        path:
+          type: string
+          description: Absolute path on the NAS
+        score:
+          type: number
+          description: Similarity score from Photos smart-search (0–1)
+        taken_at:
+          type: string
+          description: ISO-8601 timestamp when the photo was taken (omitted if unknown)
+          nullable: true
+        thumbnail_url:
+          type: string
+          description: Relative URL to the small thumbnail, e.g. /v1/photos/assets/{id}/thumbnail?size=small
+    FileNameHit:
+      type: object
+      description: One filename-index candidate returned by the filenames source
+      properties:
+        path:
+          type: string
+          description: Absolute path on the NAS
+        name:
+          type: string
+          description: Base filename
+        ext:
+          type: string
+          description: Lowercase extension without leading dot (e.g. "pdf")
+        size:
+          type: integer
+          description: File size in bytes
+        mtime_ms:
+          type: integer
+          description: Last-modified timestamp in Unix milliseconds
+        is_dir:
+          type: boolean
+          description: True when the entry is a directory
+        match:
+          type: number
+          description: Relevance score assigned by the tokenize/score algorithm
+    AggregateResponse:
+      type: object
+      description: >
+        Aggregated result from the unified nimoos_search tool. Groups candidates
+        by source (semantic, filenames, images). A source that is unavailable or
+        not requested returns an empty array; a warning string is appended.
+      properties:
+        groups:
+          type: object
+          properties:
+            semantic:
+              type: array
+              description: Hits from BGE-M3 semantic vector search (trimmed for LLM context)
+              items:
+                type: object
+            filenames:
+              type: array
+              description: Hits from the filename full-text index
+              items: { $ref: '#/components/schemas/FileNameHit' }
+            images:
+              type: array
+              description: Hits from the Photos smart-search proxy
+              items: { $ref: '#/components/schemas/ImageHit' }
+        stats:
+          type: object
+          description: Diagnostic counters (fileindex_status, total_candidates, etc.)
+          additionalProperties: true
+        warnings:
+          type: array
+          description: >
+            Per-source degradation warnings, e.g. "semantic_unavailable",
+            "filenames_unavailable", "images_unavailable".
+          items:
+            type: string
   responses:
     BadRequest:
       description: Bad request
