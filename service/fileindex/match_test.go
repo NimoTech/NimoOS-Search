@@ -49,4 +49,24 @@ func TestSearch_EmptyQuery(t *testing.T) {
 	require.Empty(t, hits)
 }
 
+func TestSearch_LikeFallbackWhenFTSDisabled(t *testing.T) {
+	idx := openTmp(t)
+	idx.ftsOK = false // force the name_lower LIKE fallback path
+	for _, r := range []Record{
+		{Path: "/DATA/annual_report_2024.pdf", Name: "annual_report_2024.pdf", Ext: "pdf", Root: "/DATA", MtimeMs: 300},
+		{Path: "/DATA/notes.txt", Name: "notes.txt", Ext: "txt", Root: "/DATA", MtimeMs: 200},
+	} {
+		require.NoError(t, idx.Upsert(r))
+	}
+	hits, err := idx.Search(context.Background(), "annual report", 10)
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	require.Equal(t, "/DATA/annual_report_2024.pdf", hits[0].Path)
+	// short (<3 char) terms: LIKE fallback can match where trigram FTS cannot
+	short, err := idx.Search(context.Background(), "no", 10)
+	require.NoError(t, err)
+	require.Len(t, short, 1, "'no' is a substring of notes.txt; LIKE fallback must find it")
+	require.Equal(t, "/DATA/notes.txt", short[0].Path)
+}
+
 var _ = filepath.Join // keep import if unused after edits

@@ -35,9 +35,9 @@ type FileNameHit struct {
 }
 
 type Index struct {
-	db      *sql.DB
-	ftsOK   bool
-	ready   atomic.Bool
+	db    *sql.DB
+	ftsOK bool
+	ready atomic.Bool
 }
 
 // Open opens (creating if needed) the SQLite database at path with WAL +
@@ -176,6 +176,9 @@ func (i *Index) Search(ctx context.Context, query string, topK int) ([]FileNameH
 
 // candidateRows returns rows whose name matches ANY term (final scoring/AND
 // weighting happens in Go). Selects the same columns regardless of backend.
+// Note: the FTS5 trigram path requires each term to be >= 3 chars; the LIKE
+// fallback has no minimum length, so very short queries may return fewer results
+// on the FTS path than on the fallback path.
 func (i *Index) candidateRows(ctx context.Context, terms []string) (*sql.Rows, error) {
 	const cols = `path,name,name_lower,ext,size,mtime_ms,is_dir`
 	if i.ftsOK {
