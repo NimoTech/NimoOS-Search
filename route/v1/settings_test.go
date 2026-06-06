@@ -13,15 +13,12 @@ import (
 )
 
 func newSettingsDeps(t *testing.T) *Deps {
-	st := &service.SettingsStore{}
-	// seed via Put through a temp store
-	s, err := service.LoadSettingsStore(t.TempDir()+"/s.json", service.SearchSettings{
+	st, err := service.LoadSettingsStore(t.TempDir()+"/s.json", service.SearchSettings{
 		DefaultSources: []string{"semantic", "filenames", "images"},
 		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15,
 		FileIndexEnabled: true, FileIndexRoots: []string{"/DATA"}, FileIndexScanIntervalH: 6,
 	})
 	require.NoError(t, err)
-	st = s
 	return &Deps{Settings: st, FileIndex: nil}
 }
 
@@ -64,4 +61,36 @@ func TestStatus_DisabledWhenNoIndex(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "disabled", body["status"])
+}
+
+func TestPutSettings_RestartRequiredOnlyForFileindexFields(t *testing.T) {
+	e := echo.New()
+	d := newSettingsDeps(t)
+	RegisterSettings(e, d)
+	// changing a restart field flags restart_required
+	req := httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(`{"fileindex_scan_interval_h":12}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, true, body["restart_required"])
+	// a runtime-only change does NOT require restart
+	req = httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(`{"semantic_top_k":7}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, false, body["restart_required"])
+}
+
+func TestRescan_DisabledWhenNoIndex(t *testing.T) {
+	e := echo.New()
+	RegisterSettings(e, newSettingsDeps(t)) // FileIndex nil
+	req := httptest.NewRequest(http.MethodPost, "/v1/search/fileindex/rescan", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }

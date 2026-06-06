@@ -64,6 +64,11 @@ func (s SearchSettings) ApplyPatch(p SearchSettingsPatch) SearchSettings {
 	return s
 }
 
+// Validate reports whether the settings are acceptable (the same checks Put
+// applies). Exposed so HTTP handlers can distinguish a 400 (bad input) from a
+// 500 (persist failure).
+func (s SearchSettings) Validate() error { return validate(s) }
+
 var validSources = map[string]bool{"semantic": true, "filenames": true, "images": true}
 
 func validate(in SearchSettings) error {

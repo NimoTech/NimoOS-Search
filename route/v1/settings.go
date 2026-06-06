@@ -40,8 +40,11 @@ func putSettings(d *Deps) echo.HandlerFunc {
 		}
 		cur := d.Settings.Get()
 		merged := cur.ApplyPatch(patch)
-		if err := d.Settings.Put(merged); err != nil {
+		if err := merged.Validate(); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		if err := d.Settings.Put(merged); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to persist settings")
 		}
 		restartRequired := (patch.FileIndexEnabled != nil && *patch.FileIndexEnabled != cur.FileIndexEnabled) ||
 			(patch.FileIndexRoots != nil && !strSliceEq(*patch.FileIndexRoots, cur.FileIndexRoots)) ||
