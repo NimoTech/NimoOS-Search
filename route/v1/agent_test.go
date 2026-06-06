@@ -72,10 +72,10 @@ func TestPostAgentTool_MissingUserIDReturns400(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "X-NimoOS-User-ID required")
 }
 
-func TestPostAgentTool_EmptyRootsReturns200WithWarning(t *testing.T) {
+func TestPostAgentTool_EmptyRootsReturns200(t *testing.T) {
 	deps := &Deps{
-		// Search/Authz nil is safe: ApplyScope short-circuits on no_accessible_roots before either is used.
-		Tools: &service.AgentTools{Search: nil, Authz: nil},
+		// Agg with nil Search: Aggregator skips semantic source, returns empty groups, 200 OK.
+		Tools: &service.AgentTools{Agg: &service.Aggregator{}, Authz: nil},
 		Wiki:  &stubWiki{roots: nil}, // user known, but no accessible roots
 	}
 	e := echo.New()
@@ -92,5 +92,5 @@ func TestPostAgentTool_EmptyRootsReturns200WithWarning(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	var got map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
-	require.Contains(t, got["warnings"], "no_accessible_roots")
+	require.Contains(t, got, "groups", "response should contain grouped results")
 }

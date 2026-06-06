@@ -8,25 +8,26 @@ import (
 // AgentTools generates the OpenAI function-calling schema served at
 // /v1/search/agent/tools and dispatches /v1/search/agent/tool invocations.
 type AgentTools struct {
-	Search *SearchService
-	Authz  *AuthzService
+	Agg   *Aggregator
+	Authz *AuthzService
 }
 
 func (a *AgentTools) ToolsSchema() map[string]any {
 	return map[string]any{"tools": []any{
 		map[string]any{
 			"name":        "nimoos_search",
-			"description": "Search the user's personal NAS for relevant content. Use this when the user asks about files, photos, videos, documents, or any past content stored on their NAS.",
+			"description": "Unified search over the user's NAS: by content (semantic), by filename, and photos — returns grouped candidates for the user to pick from. Narrow with `sources`, e.g. [\"images\"] for photos only.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]any{"type": "string"},
-					"modality": map[string]any{
-						"type": "string", "enum": []string{"auto", "text"}, "default": "auto",
-						"description": "MVP supports text only.",
+					"sources": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"semantic", "filenames", "images"}},
+						"description": "Which sources to search; omit for all three. Pass [\"images\"] to search photos only.",
 					},
-					"filters": map[string]any{"type": "object"},
-					"top_k":   map[string]any{"type": "integer", "default": 5, "maximum": 20},
+					"filters": map[string]any{"type": "object", "description": "Applies to the semantic source only."},
+					"top_k":   map[string]any{"type": "integer", "default": 5, "minimum": 1, "maximum": 20, "description": "Per-source cap."},
 				},
 				"required": []string{"query"},
 			},
@@ -67,33 +68,29 @@ const (
 // WikiClient.UserRoots(ctx, user_id) — route handler injects it so the tool
 // invocation itself can't escape root scope.
 func (a *AgentTools) Invoke(ctx context.Context, name string,
-	args map[string]any, allowedRoots []string) (map[string]any, error) {
+	args map[string]any, allowedRoots []string) (any, error) {
 	switch name {
 	case "nimoos_search":
 		query, _ := args["query"].(string)
-		topK := 5
-		if v, ok := args["top_k"].(float64); ok {
-			topK = int(v)
-		}
-		if topK > 20 {
-			topK = 20
+		var sources []string
+		if raw, ok := args["sources"].([]any); ok {
+			for _, v := range raw {
+				if s, ok := v.(string); ok {
+					sources = append(sources, s)
+				}
+			}
 		}
 		var f *Filters
 		if rawFilters, ok := args["filters"].(map[string]any); ok && rawFilters != nil {
 			f = parseFiltersMap(rawFilters)
 		}
-		scoped, warn := ApplyScope(f, allowedRoots)
-		if warn == "no_accessible_roots" {
-			return map[string]any{"hits": []any{}, "warnings": []string{warn}}, nil
-		}
-		resp, err := a.Search.SearchText(ctx, SearchRequest{
-			Query: query, Filters: scoped, TopK: topK, Rerank: true,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return trimSearchResponseForAgent(resp), nil
+		uid, _ := args["__user_id"].(string) // optional; route may inject
+		return a.Agg.Aggregate(ctx, AggregateRequest{
+			Query: query, Sources: sources, Filters: f,
+			AllowedRoots: allowedRoots, UserID: uid,
+		}), nil
 	case "read_file_chunk":
+		// unchanged
 		fileID, _ := args["file_id"].(string)
 		kind, _ := args["kind"].(string)
 		chunkNo := 0
@@ -179,12 +176,4 @@ func trimHits(r *SearchResponse) []any {
 		})
 	}
 	return hits
-}
-
-func trimSearchResponseForAgent(r *SearchResponse) map[string]any {
-	return map[string]any{
-		"hits":     trimHits(r),
-		"stats":    r.Stats,
-		"warnings": r.Warnings,
-	}
 }
