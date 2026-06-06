@@ -40,7 +40,8 @@ func TestAgentInvoke_nimoosSearch_ReturnsGroups(t *testing.T) {
 		}}}},
 		Cache: NewEmbedCache(10, 0), DefaultTopK: 5, RerankerCandidates: 40,
 	}
-	agg := &Aggregator{Search: search, SemanticTopK: 5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15}
+	st := &SettingsStore{cur: SearchSettings{DefaultSources: []string{"semantic", "filenames", "images"}, SemanticTopK: 5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15}}
+	agg := &Aggregator{Search: search, Settings: st}
 	tools := &AgentTools{Agg: agg}
 	out, err := tools.Invoke(context.Background(), "nimoos_search",
 		map[string]any{"query": "hi"}, []string{"r1"})

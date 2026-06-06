@@ -37,10 +37,11 @@ func newAggForTest(fi FileNameSearcher, im ImageSearcher) *Aggregator {
 		}}}},
 		Cache: NewEmbedCache(10, 0), DefaultTopK: 5, RerankerCandidates: 40,
 	}
-	return &Aggregator{
-		Search: search, FileIndex: fi, Photos: im,
-		SemanticTopK: 5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15,
-	}
+	st := &SettingsStore{cur: SearchSettings{
+		DefaultSources: []string{"semantic", "filenames", "images"},
+		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15,
+	}}
+	return &Aggregator{Search: search, FileIndex: fi, Photos: im, Settings: st}
 }
 
 func TestAggregate_AllThreeGroups(t *testing.T) {
@@ -91,4 +92,18 @@ func TestAggregate_NoAccessibleRootsWarns(t *testing.T) {
 	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{}})
 	require.Empty(t, resp.Groups.Semantic)
 	require.Contains(t, resp.Warnings, "no_accessible_roots")
+}
+
+func TestAggregate_ReadsLiveSettings(t *testing.T) {
+	agg := newAggForTest(
+		fakeFileSearcher{hits: []fileindex.FileNameHit{{Path: "/DATA/x.pdf"}}},
+		fakeImageSearcher{hits: []ImageHit{{AssetID: "a1"}}},
+	)
+	// change settings live → only images by default
+	cur := agg.Settings.Get()
+	cur.DefaultSources = []string{"images"}
+	agg.Settings.cur = cur
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	require.Empty(t, resp.Groups.Semantic, "DefaultSources=[images] → semantic skipped when request omits sources")
+	require.Len(t, resp.Groups.Images, 1)
 }

@@ -39,13 +39,10 @@ type AggregateResponse struct {
 }
 
 type Aggregator struct {
-	Search          *SearchService
-	FileIndex       FileNameSearcher
-	Photos          ImageSearcher
-	SemanticTopK    int
-	FilenameTopK    int
-	ImageTopK       int
-	MaxTotalResults int
+	Search    *SearchService
+	FileIndex FileNameSearcher
+	Photos    ImageSearcher
+	Settings  *SettingsStore
 }
 
 func wants(sources []string, name string) bool {
@@ -60,9 +57,12 @@ func wants(sources []string, name string) bool {
 	return false
 }
 
-// Aggregate fans out to the requested sources concurrently. A failed source
-// degrades to an empty group plus a warning; it never fails the whole call.
 func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *AggregateResponse {
+	st := a.Settings.Get()
+	sources := req.Sources
+	if len(sources) == 0 {
+		sources = st.DefaultSources // empty → fall back to configured default
+	}
 	resp := &AggregateResponse{Stats: map[string]any{}}
 	var (
 		semHits  []any
@@ -73,17 +73,14 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 		imgWarn  string
 	)
 	g := new(errgroup.Group)
-
-	if wants(req.Sources, "semantic") && a.Search != nil {
+	if wants(sources, "semantic") && a.Search != nil {
 		g.Go(func() error {
 			scoped, warn := ApplyScope(req.Filters, req.AllowedRoots)
 			if warn == "no_accessible_roots" {
 				semWarn = warn
 				return nil
 			}
-			r, err := a.Search.SearchText(ctx, SearchRequest{
-				Query: req.Query, Filters: scoped, TopK: a.SemanticTopK, Rerank: true,
-			})
+			r, err := a.Search.SearchText(ctx, SearchRequest{Query: req.Query, Filters: scoped, TopK: st.SemanticTopK, Rerank: true})
 			if err != nil {
 				semWarn = "semantic_unavailable"
 				return nil
@@ -92,9 +89,9 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 			return nil
 		})
 	}
-	if wants(req.Sources, "filenames") && a.FileIndex != nil {
+	if wants(sources, "filenames") && a.FileIndex != nil {
 		g.Go(func() error {
-			h, err := a.FileIndex.Search(ctx, req.Query, a.FilenameTopK)
+			h, err := a.FileIndex.Search(ctx, req.Query, st.FilenameTopK)
 			if err != nil {
 				fileWarn = "filenames_unavailable"
 				return nil
@@ -103,9 +100,9 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 			return nil
 		})
 	}
-	if wants(req.Sources, "images") && a.Photos != nil {
+	if wants(sources, "images") && a.Photos != nil {
 		g.Go(func() error {
-			h, err := a.Photos.SmartSearch(ctx, req.Query, a.ImageTopK, req.UserID)
+			h, err := a.Photos.SmartSearch(ctx, req.Query, st.ImageTopK, req.UserID)
 			if err != nil {
 				imgWarn = "images_unavailable"
 				return nil
@@ -115,7 +112,6 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 		})
 	}
 	_ = g.Wait()
-
 	resp.Groups.Semantic = semHits
 	resp.Groups.Filenames = fileHits
 	resp.Groups.Images = imgHits
@@ -124,7 +120,7 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 			resp.Warnings = append(resp.Warnings, w)
 		}
 	}
-	a.applyTotalCap(resp)
+	applyTotalCap(resp, st.MaxTotalResults)
 	status := "ready"
 	if a.FileIndex != nil {
 		status = a.FileIndex.Status()
@@ -135,16 +131,16 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 }
 
 // applyTotalCap trims groups proportionally so the combined count never exceeds
-// MaxTotalResults (protects LLM context).
-func (a *Aggregator) applyTotalCap(resp *AggregateResponse) {
-	if a.MaxTotalResults <= 0 {
+// max (protects LLM context).
+func applyTotalCap(resp *AggregateResponse, max int) {
+	if max <= 0 {
 		return
 	}
 	total := len(resp.Groups.Semantic) + len(resp.Groups.Filenames) + len(resp.Groups.Images)
-	if total <= a.MaxTotalResults {
+	if total <= max {
 		return
 	}
-	per := a.MaxTotalResults / 3
+	per := max / 3
 	if per < 1 {
 		per = 1
 	}
