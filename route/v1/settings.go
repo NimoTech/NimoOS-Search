@@ -58,7 +58,7 @@ func putSettings(d *Deps) echo.HandlerFunc {
 
 func postRescan(d *Deps) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		if d.FileIndex == nil {
+		if d.FileIndex == nil || d.FileIndex.Index == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "file index disabled")
 		}
 		d.FileIndex.RescanActiveRoots()

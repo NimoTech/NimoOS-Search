@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/NimoTech/NimoOS-Search/service"
+	"github.com/NimoTech/NimoOS-Search/service/fileindex"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -89,6 +90,19 @@ func TestPutSettings_RestartRequiredOnlyForFileindexFields(t *testing.T) {
 func TestRescan_DisabledWhenNoIndex(t *testing.T) {
 	e := echo.New()
 	RegisterSettings(e, newSettingsDeps(t)) // FileIndex nil
+	req := httptest.NewRequest(http.MethodPost, "/v1/search/fileindex/rescan", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestRescan_DisabledWhenEmptySubsystem(t *testing.T) {
+	// fileindex disabled at startup yields a non-nil Subsystem with a nil Index;
+	// rescan must still report 503, not a misleading started:true.
+	e := echo.New()
+	d := newSettingsDeps(t)
+	d.FileIndex = &fileindex.Subsystem{}
+	RegisterSettings(e, d)
 	req := httptest.NewRequest(http.MethodPost, "/v1/search/fileindex/rescan", nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
