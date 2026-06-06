@@ -12,6 +12,7 @@ type Deps struct {
 	Authz  *service.AuthzService
 	Wiki   WikiResolver
 	Tools  *service.AgentTools
+	Photos service.ImageSearcher
 }
 
 // WikiResolver narrows what routes need from WikiClient (testability).
