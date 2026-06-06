@@ -152,9 +152,9 @@ func parseFiltersMap(m map[string]any) *Filters {
 	return f
 }
 
-// trimSearchResponseForAgent caps paths to AgentMaxPaths and preview text
-// to AgentMaxPreviewChar, drops payload_extra entirely. Saves tokens.
-func trimSearchResponseForAgent(r *SearchResponse) map[string]any {
+// trimHits caps paths/preview per hit and drops payload_extra. Shared by the
+// agent tool's semantic group and the legacy single-source response.
+func trimHits(r *SearchResponse) []any {
 	hits := make([]any, 0, len(r.Hits))
 	for _, h := range r.Hits {
 		paths := h.Paths
@@ -178,8 +178,12 @@ func trimSearchResponseForAgent(r *SearchResponse) map[string]any {
 			"preview": map[string]any{"text": text, "thumbnail_url": nil},
 		})
 	}
+	return hits
+}
+
+func trimSearchResponseForAgent(r *SearchResponse) map[string]any {
 	return map[string]any{
-		"hits":     hits,
+		"hits":     trimHits(r),
 		"stats":    r.Stats,
 		"warnings": r.Warnings,
 	}
