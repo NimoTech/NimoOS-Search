@@ -19,8 +19,8 @@ func RegisterSettings(e *echo.Echo, d *Deps) {
 	e.GET("/v1/search/fileindex/status", getFileindexStatus(d))
 }
 
-var runtimeFields = []string{"default_sources", "semantic_top_k", "filename_top_k", "image_top_k", "max_total_results"}
-var restartFields = []string{"fileindex_enabled", "fileindex_roots", "fileindex_scan_interval_h"}
+var runtimeFields = []string{"default_sources", "semantic_top_k", "filename_top_k", "image_top_k", "max_total_results", "fileindex_roots"}
+var restartFields = []string{"fileindex_enabled", "fileindex_scan_interval_h"}
 
 func getSettings(d *Deps) echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -46,8 +46,11 @@ func putSettings(d *Deps) echo.HandlerFunc {
 		if err := d.Settings.Put(merged); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to persist settings")
 		}
+		// fileindex_roots is hot: when it actually changes, reload the index live.
+		if patch.FileIndexRoots != nil && !strSliceEq(*patch.FileIndexRoots, cur.FileIndexRoots) && d.FileIndex != nil {
+			d.FileIndex.ReloadRoots(merged.FileIndexRoots)
+		}
 		restartRequired := (patch.FileIndexEnabled != nil && *patch.FileIndexEnabled != cur.FileIndexEnabled) ||
-			(patch.FileIndexRoots != nil && !strSliceEq(*patch.FileIndexRoots, cur.FileIndexRoots)) ||
 			(patch.FileIndexScanIntervalH != nil && *patch.FileIndexScanIntervalH != cur.FileIndexScanIntervalH)
 		return c.JSON(http.StatusOK, map[string]any{
 			"settings":         d.Settings.Get(),
