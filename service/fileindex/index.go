@@ -157,7 +157,7 @@ func (i *Index) PurgeOutside(roots []string) error {
 		return err
 	}
 	if i.ftsOK {
-		// schema 无 AFTER DELETE 触发器,FTS 影子表须手动同删(与 DeletePrefix 一致)
+		// no AFTER DELETE trigger in the schema; the FTS shadow table is synced manually (as DeletePrefix does)
 		_, _ = i.db.Exec(`DELETE FROM file_name_fts WHERE NOT (`+inside+`)`, args...)
 	}
 	return nil
