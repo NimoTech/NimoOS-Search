@@ -172,39 +172,15 @@ func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.Even
 	if degraded <= 0 {
 		degraded = time.Hour
 	}
-	w := fileindex.NewWatcher(idx, s.FileIndexRoots)
-	w.SetOnDegrade(func() {
+	sub := fileindex.NewSubsystem(idx, normal, degraded, func() {
 		eb.PublishWarning("fileindex_watch_degraded",
 			"inotify watch limit reached; falling back to periodic scan. Raise fs.inotify.max_user_watches.")
 	})
-	stop := make(chan struct{})
-	// Background boot scan + watcher + periodic reconcile (does not block readiness).
-	go func() {
-		_ = idx.BootScan(s.FileIndexRoots)
-		idx.SetReady()
-		_ = w.Start(stop)
-		// Reconcile on a shorter interval once the watcher has degraded to
-		// scan-only, so drift is corrected faster without live watches.
-		for {
-			interval := normal
-			if w.Degraded() {
-				interval = degraded
-			}
-			select {
-			case <-stop:
-				return
-			case <-time.After(interval):
-				for _, r := range s.FileIndexRoots {
-					_ = idx.Reconcile(r)
-				}
-			}
-		}
-	}()
+	sub.StartInitial(s.FileIndexRoots) // PurgeOutside(roots)+BootScan(roots) in background
 	lc.Append(fx.Hook{OnStop: func(ctx context.Context) error {
-		close(stop)
-		return idx.Close()
+		return sub.Close()
 	}})
-	return &fileindex.Subsystem{Index: idx, Watcher: w, Roots: s.FileIndexRoots}, nil
+	return sub, nil
 }
 
 func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
