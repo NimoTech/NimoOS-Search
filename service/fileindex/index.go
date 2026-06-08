@@ -127,6 +127,42 @@ func (i *Index) DeletePrefix(path string) error {
 	return nil
 }
 
+// PurgeOutside removes every indexed row whose path is neither equal to nor a
+// descendant of any given root. Used on a root-set change to drop entries that
+// fall outside the new roots (e.g. removed system/mount paths) WITHOUT deleting
+// or re-scanning the retained roots' rows. Empty roots clears everything.
+//
+// Uses substr+'=' (BINARY collation, case-sensitive) for the prefix test rather
+// than LIKE: SQLite's LIKE is case-insensitive by default (this DB sets no
+// case_sensitive_like pragma), which would treat /data as inside /DATA and fail
+// to purge it; substr also avoids GLOB treating [ * ? in a root as wildcards.
+func (i *Index) PurgeOutside(roots []string) error {
+	if len(roots) == 0 {
+		if _, err := i.db.Exec(`DELETE FROM file_index`); err != nil {
+			return err
+		}
+		if i.ftsOK {
+			_, _ = i.db.Exec(`DELETE FROM file_name_fts`)
+		}
+		return nil
+	}
+	conds := make([]string, 0, len(roots))
+	args := make([]any, 0, len(roots)*3)
+	for _, r := range roots {
+		conds = append(conds, "path = ? OR substr(path, 1, length(?)) = ?")
+		args = append(args, r, r+"/", r+"/")
+	}
+	inside := strings.Join(conds, " OR ")
+	if _, err := i.db.Exec(`DELETE FROM file_index WHERE NOT (`+inside+`)`, args...); err != nil {
+		return err
+	}
+	if i.ftsOK {
+		// schema 无 AFTER DELETE 触发器,FTS 影子表须手动同删(与 DeletePrefix 一致)
+		_, _ = i.db.Exec(`DELETE FROM file_name_fts WHERE NOT (`+inside+`)`, args...)
+	}
+	return nil
+}
+
 func (i *Index) Count(ctx context.Context) (int, error) {
 	var n int
 	err := i.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM file_index`).Scan(&n)
