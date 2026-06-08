@@ -43,11 +43,16 @@ func NewSubsystem(idx *Index, normal, degraded time.Duration, onDegrade func()) 
 
 // StartInitial launches the indexing goroutine for the first time. It also runs
 // PurgeOutside, clearing any rows left in the DB from a previous run that fall
-// outside the current roots.
+// outside the current roots. Stopping any prior goroutine first keeps it safe
+// against an accidental second call (which would otherwise leak a goroutine
+// holding workMu and wedge all future indexing).
 func (s *Subsystem) StartInitial(roots []string) {
 	cleaned := cleanRoots(roots)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stop != nil {
+		close(s.stop)
+	}
 	s.startIndexing(cleaned)
 }
 
@@ -128,7 +133,9 @@ func (s *Subsystem) startIndexing(roots []string) {
 }
 
 // Close stops the current indexing goroutine and closes the index. Safe to call
-// more than once.
+// more than once. An in-flight scan (uninterruptible WalkDir) may still touch
+// the DB after it is closed; those ops fail harmlessly (sql.ErrConnDone, logged
+// or ignored) — acceptable on shutdown.
 func (s *Subsystem) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
