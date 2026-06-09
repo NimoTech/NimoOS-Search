@@ -9,16 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVisualStub503(t *testing.T) {
-	e := echo.New()
-	RegisterStubs(e)
-	req := httptest.NewRequest(http.MethodPost, "/v1/search/visual", nil)
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	require.Contains(t, rec.Body.String(), "visual pipeline not yet available")
-}
-
 func TestHybridStub503(t *testing.T) {
 	e := echo.New()
 	RegisterStubs(e)

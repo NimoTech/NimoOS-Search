@@ -42,3 +42,18 @@ func TestEnvOverridesINI(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5, c.DefaultTopK)
 }
+
+func TestDefaults_FileIndexAndAggregate(t *testing.T) {
+	c := defaults()
+	require.True(t, c.FileIndexEnabled)
+	require.Equal(t, []string{"/DATA", "/mnt", "/media"}, c.FileIndexRoots)
+	require.Equal(t, "/var/lib/nimoos/db/search.db", c.FileIndexDBPath)
+	require.Equal(t, 6, c.FileIndexScanIntervalH)
+	require.Equal(t, 1, c.FileIndexDegradedScanIntervalH)
+	require.Equal(t, "/var/run/nimoos/photos.url", c.PhotosDiscoveryPath)
+	require.Equal(t, 5, c.AggSemanticTopK)
+	require.Equal(t, 5, c.AggFilenameTopK)
+	require.Equal(t, 5, c.AggImageTopK)
+	require.Equal(t, 15, c.AggMaxTotalResults)
+	require.Equal(t, "/var/lib/nimoos/search-settings.json", c.SettingsPath)
+}

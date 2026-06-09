@@ -56,6 +56,10 @@ func postAgentTool(d *Deps) echo.HandlerFunc {
 					"unable to determine user roots: "+err.Error())
 			}
 		}
+		if body.Arguments == nil {
+			body.Arguments = map[string]any{}
+		}
+		body.Arguments["__user_id"] = uid
 		result, err := d.Tools.Invoke(c.Request().Context(), body.Name, body.Arguments, allowedRoots)
 		if errors.Is(err, service.ErrFileNotInScope) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found")

@@ -49,7 +49,8 @@ func TestE2E_TextSearchHappyPath(t *testing.T) {
 		ParserVersion: "parser/0.1.0", DefaultTopK: 5, RerankerCandidates: 40,
 	}
 	authz := &service.AuthzService{Qdrant: q}
-	tools := &service.AgentTools{Search: search, Authz: authz}
+	agg := &service.Aggregator{Search: search}
+	tools := &service.AgentTools{Agg: agg, Authz: authz}
 
 	// 4. Wire Echo
 	e := echo.New()

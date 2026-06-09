@@ -8,18 +8,18 @@ import (
 )
 
 type Config struct {
-	BindHost              string
-	RerankerEnabled       bool
-	RerankerCandidates    int
-	DefaultTopK           int
-	MaxTopK               int
-	EmbedCacheSize        int
-	EmbedCacheTTLSec      int
-	UserRootsCacheTTLSec  int
-	ParserTimeoutSec      int
-	WikiTimeoutSec        int
-	QdrantURL             string
-	QdrantGRPCPort        int
+	BindHost             string
+	RerankerEnabled      bool
+	RerankerCandidates   int
+	DefaultTopK          int
+	MaxTopK              int
+	EmbedCacheSize       int
+	EmbedCacheTTLSec     int
+	UserRootsCacheTTLSec int
+	ParserTimeoutSec     int
+	WikiTimeoutSec       int
+	QdrantURL            string
+	QdrantGRPCPort       int
 
 	ParserDiscoveryPath  string
 	WikiDiscoveryPath    string
@@ -29,29 +29,59 @@ type Config struct {
 	RuntimePath string
 	DataPath    string
 	LogPath     string
+
+	// fileindex
+	FileIndexEnabled               bool
+	FileIndexRoots                 []string
+	FileIndexDBPath                string
+	FileIndexScanIntervalH         int
+	FileIndexDegradedScanIntervalH int
+
+	// photos proxy
+	PhotosDiscoveryPath string
+
+	// aggregate
+	AggSemanticTopK    int
+	AggFilenameTopK    int
+	AggImageTopK       int
+	AggMaxTotalResults int
+
+	// runtime-mutable settings overlay
+	SettingsPath string
 }
 
 func defaults() Config {
 	return Config{
-		BindHost:             "127.0.0.1",
-		RerankerEnabled:      true,
-		RerankerCandidates:   40,
-		DefaultTopK:          20,
-		MaxTopK:              100,
-		EmbedCacheSize:       1000,
-		EmbedCacheTTLSec:     300,
-		UserRootsCacheTTLSec: 60,
-		ParserTimeoutSec:     10,
-		WikiTimeoutSec:       5,
-		QdrantURL:            "http://127.0.0.1:6333",
-		QdrantGRPCPort:       6334,
-		ParserDiscoveryPath:  "/var/run/nimoos/parser.url",
-		WikiDiscoveryPath:    "/var/run/nimoos/wiki.url",
-		GatewayDiscoveryPath: "/var/run/nimoos/management.url",
-		MessageBusSocket:     "/var/run/nimoos/message-bus.sock",
-		RuntimePath:          "/var/run/nimoos",
-		DataPath:             "/var/lib/nimoos/search",
-		LogPath:              "/var/log/nimoos",
+		BindHost:                       "127.0.0.1",
+		RerankerEnabled:                true,
+		RerankerCandidates:             40,
+		DefaultTopK:                    20,
+		MaxTopK:                        100,
+		EmbedCacheSize:                 1000,
+		EmbedCacheTTLSec:               300,
+		UserRootsCacheTTLSec:           60,
+		ParserTimeoutSec:               10,
+		WikiTimeoutSec:                 5,
+		QdrantURL:                      "http://127.0.0.1:6333",
+		QdrantGRPCPort:                 6334,
+		ParserDiscoveryPath:            "/var/run/nimoos/parser.url",
+		WikiDiscoveryPath:              "/var/run/nimoos/wiki.url",
+		GatewayDiscoveryPath:           "/var/run/nimoos/management.url",
+		MessageBusSocket:               "/var/run/nimoos/message-bus.sock",
+		RuntimePath:                    "/var/run/nimoos",
+		DataPath:                       "/var/lib/nimoos/search",
+		LogPath:                        "/var/log/nimoos",
+		FileIndexEnabled:               true,
+		FileIndexRoots:                 []string{"/DATA", "/mnt", "/media"},
+		FileIndexDBPath:                "/var/lib/nimoos/db/search.db",
+		FileIndexScanIntervalH:         6,
+		FileIndexDegradedScanIntervalH: 1,
+		PhotosDiscoveryPath:            "/var/run/nimoos/photos.url",
+		AggSemanticTopK:                5,
+		AggFilenameTopK:                5,
+		AggImageTopK:                   5,
+		AggMaxTotalResults:             15,
+		SettingsPath:                   "/var/lib/nimoos/search-settings.json",
 	}
 }
 
@@ -72,40 +102,146 @@ func Load(path string) (Config, error) {
 
 func applyINI(f *ini.File, c *Config) {
 	if s := f.Section("search"); s != nil {
-		if k, _ := s.GetKey("BindHost"); k != nil { c.BindHost = k.String() }
-		if k, _ := s.GetKey("RerankerEnabled"); k != nil { c.RerankerEnabled, _ = k.Bool() }
-		if k, _ := s.GetKey("RerankerCandidates"); k != nil { c.RerankerCandidates, _ = k.Int() }
-		if k, _ := s.GetKey("DefaultTopK"); k != nil { c.DefaultTopK, _ = k.Int() }
-		if k, _ := s.GetKey("MaxTopK"); k != nil { c.MaxTopK, _ = k.Int() }
-		if k, _ := s.GetKey("EmbedCacheSize"); k != nil { c.EmbedCacheSize, _ = k.Int() }
-		if k, _ := s.GetKey("EmbedCacheTtlSec"); k != nil { c.EmbedCacheTTLSec, _ = k.Int() }
-		if k, _ := s.GetKey("UserRootsCacheTtlSec"); k != nil { c.UserRootsCacheTTLSec, _ = k.Int() }
-		if k, _ := s.GetKey("ParserTimeoutSec"); k != nil { c.ParserTimeoutSec, _ = k.Int() }
-		if k, _ := s.GetKey("WikiTimeoutSec"); k != nil { c.WikiTimeoutSec, _ = k.Int() }
-		if k, _ := s.GetKey("QdrantUrl"); k != nil { c.QdrantURL = k.String() }
-		if k, _ := s.GetKey("QdrantGrpcPort"); k != nil { c.QdrantGRPCPort, _ = k.Int() }
+		if k, _ := s.GetKey("BindHost"); k != nil {
+			c.BindHost = k.String()
+		}
+		if k, _ := s.GetKey("RerankerEnabled"); k != nil {
+			c.RerankerEnabled, _ = k.Bool()
+		}
+		if k, _ := s.GetKey("RerankerCandidates"); k != nil {
+			c.RerankerCandidates, _ = k.Int()
+		}
+		if k, _ := s.GetKey("DefaultTopK"); k != nil {
+			c.DefaultTopK, _ = k.Int()
+		}
+		if k, _ := s.GetKey("MaxTopK"); k != nil {
+			c.MaxTopK, _ = k.Int()
+		}
+		if k, _ := s.GetKey("EmbedCacheSize"); k != nil {
+			c.EmbedCacheSize, _ = k.Int()
+		}
+		if k, _ := s.GetKey("EmbedCacheTtlSec"); k != nil {
+			c.EmbedCacheTTLSec, _ = k.Int()
+		}
+		if k, _ := s.GetKey("UserRootsCacheTtlSec"); k != nil {
+			c.UserRootsCacheTTLSec, _ = k.Int()
+		}
+		if k, _ := s.GetKey("ParserTimeoutSec"); k != nil {
+			c.ParserTimeoutSec, _ = k.Int()
+		}
+		if k, _ := s.GetKey("WikiTimeoutSec"); k != nil {
+			c.WikiTimeoutSec, _ = k.Int()
+		}
+		if k, _ := s.GetKey("QdrantUrl"); k != nil {
+			c.QdrantURL = k.String()
+		}
+		if k, _ := s.GetKey("QdrantGrpcPort"); k != nil {
+			c.QdrantGRPCPort, _ = k.Int()
+		}
 	}
 	if s := f.Section("upstream"); s != nil {
-		if k, _ := s.GetKey("ParserDiscoveryPath"); k != nil { c.ParserDiscoveryPath = k.String() }
-		if k, _ := s.GetKey("WikiDiscoveryPath"); k != nil { c.WikiDiscoveryPath = k.String() }
-		if k, _ := s.GetKey("GatewayDiscoveryPath"); k != nil { c.GatewayDiscoveryPath = k.String() }
-		if k, _ := s.GetKey("MessageBusSocket"); k != nil { c.MessageBusSocket = k.String() }
+		if k, _ := s.GetKey("ParserDiscoveryPath"); k != nil {
+			c.ParserDiscoveryPath = k.String()
+		}
+		if k, _ := s.GetKey("WikiDiscoveryPath"); k != nil {
+			c.WikiDiscoveryPath = k.String()
+		}
+		if k, _ := s.GetKey("GatewayDiscoveryPath"); k != nil {
+			c.GatewayDiscoveryPath = k.String()
+		}
+		if k, _ := s.GetKey("MessageBusSocket"); k != nil {
+			c.MessageBusSocket = k.String()
+		}
 	}
 	if s := f.Section("common"); s != nil {
-		if k, _ := s.GetKey("RuntimePath"); k != nil { c.RuntimePath = k.String() }
-		if k, _ := s.GetKey("DataPath"); k != nil { c.DataPath = k.String() }
-		if k, _ := s.GetKey("LogPath"); k != nil { c.LogPath = k.String() }
+		if k, _ := s.GetKey("RuntimePath"); k != nil {
+			c.RuntimePath = k.String()
+		}
+		if k, _ := s.GetKey("DataPath"); k != nil {
+			c.DataPath = k.String()
+		}
+		if k, _ := s.GetKey("LogPath"); k != nil {
+			c.LogPath = k.String()
+		}
+	}
+	if s := f.Section("fileindex"); s != nil {
+		if k, _ := s.GetKey("Enabled"); k != nil {
+			c.FileIndexEnabled, _ = k.Bool()
+		}
+		if k, _ := s.GetKey("Roots"); k != nil {
+			c.FileIndexRoots = k.Strings(",")
+		}
+		if k, _ := s.GetKey("DBPath"); k != nil {
+			c.FileIndexDBPath = k.String()
+		}
+		if k, _ := s.GetKey("ScanIntervalH"); k != nil {
+			c.FileIndexScanIntervalH, _ = k.Int()
+		}
+		if k, _ := s.GetKey("DegradedScanIntervalH"); k != nil {
+			c.FileIndexDegradedScanIntervalH, _ = k.Int()
+		}
+	}
+	if s := f.Section("photos"); s != nil {
+		if k, _ := s.GetKey("DiscoveryPath"); k != nil {
+			c.PhotosDiscoveryPath = k.String()
+		}
+	}
+	if s := f.Section("aggregate"); s != nil {
+		if k, _ := s.GetKey("SemanticTopK"); k != nil {
+			c.AggSemanticTopK, _ = k.Int()
+		}
+		if k, _ := s.GetKey("FilenameTopK"); k != nil {
+			c.AggFilenameTopK, _ = k.Int()
+		}
+		if k, _ := s.GetKey("ImageTopK"); k != nil {
+			c.AggImageTopK, _ = k.Int()
+		}
+		if k, _ := s.GetKey("MaxTotalResults"); k != nil {
+			c.AggMaxTotalResults, _ = k.Int()
+		}
 	}
 }
 
 func applyEnv(c *Config) {
-	if v := os.Getenv("SEARCH_BIND_HOST"); v != "" { c.BindHost = v }
-	if v := os.Getenv("SEARCH_DEFAULT_TOP_K"); v != "" { if n, err := strconv.Atoi(v); err == nil { c.DefaultTopK = n } }
-	if v := os.Getenv("SEARCH_MAX_TOP_K"); v != "" { if n, err := strconv.Atoi(v); err == nil { c.MaxTopK = n } }
-	if v := os.Getenv("SEARCH_EMBED_CACHE_SIZE"); v != "" { if n, err := strconv.Atoi(v); err == nil { c.EmbedCacheSize = n } }
-	if v := os.Getenv("SEARCH_QDRANT_URL"); v != "" { c.QdrantURL = v }
-	if v := os.Getenv("SEARCH_QDRANT_GRPC_PORT"); v != "" { if n, err := strconv.Atoi(v); err == nil { c.QdrantGRPCPort = n } }
-	if v := os.Getenv("SEARCH_PARSER_DISCOVERY_PATH"); v != "" { c.ParserDiscoveryPath = v }
-	if v := os.Getenv("SEARCH_WIKI_DISCOVERY_PATH"); v != "" { c.WikiDiscoveryPath = v }
-	if v := os.Getenv("SEARCH_GATEWAY_DISCOVERY_PATH"); v != "" { c.GatewayDiscoveryPath = v }
+	if v := os.Getenv("SEARCH_BIND_HOST"); v != "" {
+		c.BindHost = v
+	}
+	if v := os.Getenv("SEARCH_DEFAULT_TOP_K"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.DefaultTopK = n
+		}
+	}
+	if v := os.Getenv("SEARCH_MAX_TOP_K"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.MaxTopK = n
+		}
+	}
+	if v := os.Getenv("SEARCH_EMBED_CACHE_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.EmbedCacheSize = n
+		}
+	}
+	if v := os.Getenv("SEARCH_QDRANT_URL"); v != "" {
+		c.QdrantURL = v
+	}
+	if v := os.Getenv("SEARCH_QDRANT_GRPC_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.QdrantGRPCPort = n
+		}
+	}
+	if v := os.Getenv("SEARCH_PARSER_DISCOVERY_PATH"); v != "" {
+		c.ParserDiscoveryPath = v
+	}
+	if v := os.Getenv("SEARCH_WIKI_DISCOVERY_PATH"); v != "" {
+		c.WikiDiscoveryPath = v
+	}
+	if v := os.Getenv("SEARCH_GATEWAY_DISCOVERY_PATH"); v != "" {
+		c.GatewayDiscoveryPath = v
+	}
+	if v := os.Getenv("SEARCH_FILEINDEX_ENABLED"); v != "" {
+		c.FileIndexEnabled = v == "1" || v == "true"
+	}
+	if v := os.Getenv("SEARCH_PHOTOS_DISCOVERY_PATH"); v != "" {
+		c.PhotosDiscoveryPath = v
+	}
 }

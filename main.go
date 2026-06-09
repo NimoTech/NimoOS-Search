@@ -19,6 +19,7 @@ import (
 	"github.com/NimoTech/NimoOS-Search/config"
 	v1 "github.com/NimoTech/NimoOS-Search/route/v1"
 	"github.com/NimoTech/NimoOS-Search/service"
+	"github.com/NimoTech/NimoOS-Search/service/fileindex"
 	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/fx"
@@ -58,6 +59,10 @@ func main() {
 			newQdrantClient,
 			newCache,
 			newSearchService,
+			newSettingsStore,
+			newFileIndex,
+			newPhotosClient,
+			newAggregator,
 			newAuthzService,
 			newAgentTools,
 			newEcho,
@@ -134,8 +139,74 @@ func newAuthzService(q *service.QdrantClient) *service.AuthzService {
 	return &service.AuthzService{Qdrant: q}
 }
 
-func newAgentTools(s *service.SearchService, a *service.AuthzService) *service.AgentTools {
-	return &service.AgentTools{Search: s, Authz: a}
+func newSettingsStore(cfg config.Config) (*service.SettingsStore, error) {
+	return service.LoadSettingsStore(cfg.SettingsPath, service.SearchSettings{
+		DefaultSources:         []string{"semantic", "filenames", "images"},
+		SemanticTopK:           cfg.AggSemanticTopK,
+		FilenameTopK:           cfg.AggFilenameTopK,
+		ImageTopK:              cfg.AggImageTopK,
+		MaxTotalResults:        cfg.AggMaxTotalResults,
+		FileIndexEnabled:       cfg.FileIndexEnabled,
+		FileIndexRoots:         cfg.FileIndexRoots,
+		FileIndexScanIntervalH: cfg.FileIndexScanIntervalH,
+	})
+}
+
+func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.EventBus, lc fx.Lifecycle) (*fileindex.Subsystem, error) {
+	s := st.Get()
+	if !s.FileIndexEnabled {
+		return &fileindex.Subsystem{}, nil // disabled: nil Index → Report()=disabled
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.FileIndexDBPath), 0755); err != nil {
+		return nil, err
+	}
+	idx, err := fileindex.Open(cfg.FileIndexDBPath)
+	if err != nil {
+		return nil, err
+	}
+	normal := time.Duration(s.FileIndexScanIntervalH) * time.Hour
+	if normal <= 0 {
+		normal = 6 * time.Hour
+	}
+	degraded := time.Duration(cfg.FileIndexDegradedScanIntervalH) * time.Hour
+	if degraded <= 0 {
+		degraded = time.Hour
+	}
+	sub := fileindex.NewSubsystem(idx, normal, degraded, func() {
+		eb.PublishWarning("fileindex_watch_degraded",
+			"inotify watch limit reached; falling back to periodic scan. Raise fs.inotify.max_user_watches.")
+	})
+	sub.StartInitial(s.FileIndexRoots) // PurgeOutside(roots)+BootScan(roots) in background
+	lc.Append(fx.Hook{OnStop: func(ctx context.Context) error {
+		return sub.Close()
+	}})
+	return sub, nil
+}
+
+func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
+	base, err := readDiscoveryURL(cfg.PhotosDiscoveryPath, "")
+	if err != nil || base == "" {
+		// Photos not discovered: aggregator/visual degrade (nil client).
+		return nil, nil
+	}
+	return service.NewPhotosClient(base, 5), nil
+}
+
+func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, st *service.SettingsStore) *service.Aggregator {
+	agg := &service.Aggregator{Search: s, Settings: st}
+	// Assign through interfaces only when non-nil, so a nil *T doesn't become a
+	// non-nil interface (Go typed-nil trap) that breaks the `== nil` checks.
+	if sub != nil && sub.Index != nil {
+		agg.FileIndex = sub.Index
+	}
+	if p != nil {
+		agg.Photos = p
+	}
+	return agg
+}
+
+func newAgentTools(agg *service.Aggregator, a *service.AuthzService) *service.AgentTools {
+	return &service.AgentTools{Agg: agg, Authz: a}
 }
 
 func newEcho() *echo.Echo {
@@ -168,15 +239,21 @@ func newEventBus(cfg config.Config, lc fx.Lifecycle) *service.EventBus {
 }
 
 func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzService,
-	w *service.WikiClient, t *service.AgentTools) {
-	deps := &v1.Deps{Search: s, Authz: a, Wiki: w, Tools: t}
+	w *service.WikiClient, t *service.AgentTools, p *service.PhotosClient,
+	sub *fileindex.Subsystem, st *service.SettingsStore) {
+	deps := &v1.Deps{Search: s, Authz: a, Wiki: w, Tools: t, Settings: st, FileIndex: sub}
+	if p != nil {
+		deps.Photos = p
+	}
 	e.GET("/healthz", v1.Healthz)
 	v1.RegisterText(e, deps)
 	v1.RegisterFile(e, deps)
 	v1.RegisterChunk(e, deps)
 	v1.RegisterAgent(e, deps)
+	v1.RegisterVisual(e, deps)
 	v1.RegisterStubs(e)
 	v1.RegisterInternal(e, deps)
+	v1.RegisterSettings(e, deps)
 }
 
 func startListener(lc fx.Lifecycle, e *echo.Echo, cfg config.Config) error {
