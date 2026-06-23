@@ -133,3 +133,35 @@ func TestGetDocumentText_NoMatchReturnsErrNotInScope(t *testing.T) {
 	_, err := svc.GetDocumentText(context.Background(), "f-secret", []string{"r1"}, 0, 24000)
 	require.ErrorIs(t, err, ErrFileNotInScope)
 }
+
+func TestGetDocumentText_PagingRoundTrip(t *testing.T) {
+	// One 10-char body chunk. Page through it in 4-char windows using the
+	// returned NextOffset and confirm the windows reconstruct the whole
+	// document with no loss or overlap (the headline long-doc paging path).
+	q := &recordingQdrant{hits: []QdrantHit{
+		{Payload: map[string]any{"file_id": "f1", "kind": "body", "chunk_no": int64(0),
+			"text": "abcdefghij", "offset_start": int64(0), "offset_end": int64(10), "root_ids": []any{"r1"}}},
+	}}
+	svc := &AuthzService{Qdrant: q}
+
+	p1, err := svc.GetDocumentText(context.Background(), "f1", []string{"r1"}, 0, 4)
+	require.NoError(t, err)
+	require.Equal(t, "abcd", p1.Text)
+	require.True(t, p1.Truncated)
+	require.Equal(t, 4, p1.NextOffset)
+	require.Equal(t, 10, p1.TotalChars)
+
+	p2, err := svc.GetDocumentText(context.Background(), "f1", []string{"r1"}, p1.NextOffset, 4)
+	require.NoError(t, err)
+	require.Equal(t, "efgh", p2.Text)
+	require.True(t, p2.Truncated)
+	require.Equal(t, 8, p2.NextOffset)
+
+	p3, err := svc.GetDocumentText(context.Background(), "f1", []string{"r1"}, p2.NextOffset, 4)
+	require.NoError(t, err)
+	require.Equal(t, "ij", p3.Text)
+	require.False(t, p3.Truncated)
+	require.Equal(t, 0, p3.NextOffset)
+
+	require.Equal(t, "abcdefghij", p1.Text+p2.Text+p3.Text)
+}
