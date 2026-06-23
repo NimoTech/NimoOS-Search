@@ -69,3 +69,67 @@ func (r *recordingQdrant) ScrollByFileID(ctx context.Context, c, fid string, roo
 	return r.hits, "", nil
 }
 func (r *recordingQdrant) Count(ctx context.Context, c string) (uint64, error) { return 0, nil }
+
+func TestGetDocumentText_StitchesBodyChunksWithPageMarkers(t *testing.T) {
+	q := &recordingQdrant{hits: []QdrantHit{
+		{Payload: map[string]any{"file_id": "f1", "kind": "body", "chunk_no": int64(0),
+			"text": "alpha", "page": int64(1), "offset_start": int64(0), "offset_end": int64(5), "root_ids": []any{"r1"}}},
+		{Payload: map[string]any{"file_id": "f1", "kind": "body", "chunk_no": int64(1),
+			"text": "betaX", "page": int64(2), "offset_start": int64(5), "offset_end": int64(10), "root_ids": []any{"r1"}}},
+	}}
+	svc := &AuthzService{Qdrant: q}
+	out, err := svc.GetDocumentText(context.Background(), "f1", []string{"r1"}, 0, 24000)
+	require.NoError(t, err)
+	require.Equal(t, "\n\n[Page 1]\n\nalpha\n\n[Page 2]\n\nbetaX", out.Text)
+	require.False(t, out.Truncated)
+}
+
+func TestGetDocumentText_DedupsOverlapByOffset(t *testing.T) {
+	// chunk_plain-style overlap: chunk1 [0,6)="abcdef", chunk2 [4,10)="efghij"
+	// (offsets are CHARACTER counts; the 2-char overlap "ef" must not duplicate).
+	q := &recordingQdrant{hits: []QdrantHit{
+		{Payload: map[string]any{"file_id": "f1", "kind": "body", "chunk_no": int64(0),
+			"text": "abcdef", "offset_start": int64(0), "offset_end": int64(6), "root_ids": []any{"r1"}}},
+		{Payload: map[string]any{"file_id": "f1", "kind": "body", "chunk_no": int64(1),
+			"text": "efghij", "offset_start": int64(4), "offset_end": int64(10), "root_ids": []any{"r1"}}},
+	}}
+	svc := &AuthzService{Qdrant: q}
+	out, err := svc.GetDocumentText(context.Background(), "f1", []string{"r1"}, 0, 24000)
+	require.NoError(t, err)
+	require.Equal(t, "abcdefghij", out.Text)
+}
+
+func TestGetDocumentText_RuneSafeWindow(t *testing.T) {
+	// 4 CJK chars; window of 2 chars must not split a multibyte rune.
+	q := &recordingQdrant{hits: []QdrantHit{
+		{Payload: map[string]any{"file_id": "f1", "kind": "body", "chunk_no": int64(0),
+			"text": "你好世界", "offset_start": int64(0), "offset_end": int64(4), "root_ids": []any{"r1"}}},
+	}}
+	svc := &AuthzService{Qdrant: q}
+	out, err := svc.GetDocumentText(context.Background(), "f1", []string{"r1"}, 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, "你好", out.Text)
+	require.True(t, out.Truncated)
+	require.Equal(t, 2, out.NextOffset)
+	require.Equal(t, 4, out.TotalChars)
+}
+
+func TestGetDocumentText_IgnoresNonBody(t *testing.T) {
+	q := &recordingQdrant{hits: []QdrantHit{
+		{Payload: map[string]any{"file_id": "f1", "kind": "body", "chunk_no": int64(0),
+			"text": "real", "offset_start": int64(0), "offset_end": int64(4), "root_ids": []any{"r1"}}},
+		{Payload: map[string]any{"file_id": "f1", "kind": "ocr", "chunk_no": int64(0),
+			"text": "noise", "offset_start": int64(0), "offset_end": int64(5), "root_ids": []any{"r1"}}},
+	}}
+	svc := &AuthzService{Qdrant: q}
+	out, err := svc.GetDocumentText(context.Background(), "f1", []string{"r1"}, 0, 24000)
+	require.NoError(t, err)
+	require.Equal(t, "real", out.Text)
+}
+
+func TestGetDocumentText_NoMatchReturnsErrNotInScope(t *testing.T) {
+	q := &recordingQdrant{hits: []QdrantHit{}}
+	svc := &AuthzService{Qdrant: q}
+	_, err := svc.GetDocumentText(context.Background(), "f-secret", []string{"r1"}, 0, 24000)
+	require.ErrorIs(t, err, ErrFileNotInScope)
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 var ErrFileNotInScope = errors.New("file not in user's accessible roots (or not indexed)")
@@ -173,4 +175,106 @@ func hitToFileChunk(h QdrantHit) FileChunk {
 		fc.FrameMsEnd = &v
 	}
 	return fc
+}
+
+type DocumentTextResponse struct {
+	FileID     string `json:"file_id"`
+	Text       string `json:"text"`
+	Truncated  bool   `json:"truncated"`
+	TotalChars int    `json:"total_chars"`
+	NextOffset int    `json:"next_offset"`
+}
+
+// GetDocumentText reconstructs a document's full body text from its indexed
+// chunks (kind=="body" only), then returns the character window
+// [charOffset, charOffset+maxChars). Chunks are stitched in chunk_no order
+// using their character offsets so overlapping chunks (chunk_plain adds ~320
+// chars of overlap) don't duplicate text, while non-overlapping chunks
+// (chunk_markdown/source) concatenate cleanly. A "\n\n[Page N]\n\n" marker is
+// inserted wherever the page changes. All slicing is rune-based because Parser
+// offsets are character counts — byte slicing would corrupt multibyte text.
+// Same root authz as GetFileChunks: empty allowedRoots or no matching chunk →
+// ErrFileNotInScope (route maps to 404). Tombstoned chunks have empty root_ids
+// and are already excluded by the RootIDsAny filter inside ScrollByFileID.
+func (s *AuthzService) GetDocumentText(ctx context.Context, fileID string,
+	allowedRoots []string, charOffset, maxChars int) (*DocumentTextResponse, error) {
+	if len(allowedRoots) == 0 {
+		return nil, ErrFileNotInScope
+	}
+	body := []FileChunk{}
+	off := ""
+	for {
+		hits, next, err := s.Qdrant.ScrollByFileID(ctx, collectionTextChunks, fileID, allowedRoots, 500, off)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range hits {
+			fc := hitToFileChunk(h)
+			if fc.Kind == "body" {
+				body = append(body, fc)
+			}
+		}
+		if next == "" {
+			break
+		}
+		off = next
+	}
+	if len(body) == 0 {
+		return nil, ErrFileNotInScope
+	}
+	sort.SliceStable(body, func(i, j int) bool { return body[i].ChunkNo < body[j].ChunkNo })
+
+	var sb strings.Builder
+	var cursor int64 // characters consumed from the original document text
+	var lastPage *int
+	for _, c := range body {
+		if c.Page != nil && (lastPage == nil || *c.Page != *lastPage) {
+			sb.WriteString("\n\n[Page ")
+			sb.WriteString(strconv.Itoa(*c.Page))
+			sb.WriteString("]\n\n")
+			p := *c.Page
+			lastPage = &p
+		}
+		if c.OffsetStart != nil && c.OffsetEnd != nil {
+			if *c.OffsetStart >= cursor {
+				sb.WriteString(c.Text)
+			} else {
+				skip := cursor - *c.OffsetStart
+				runes := []rune(c.Text)
+				if skip < int64(len(runes)) {
+					sb.WriteString(string(runes[skip:]))
+				}
+			}
+			if *c.OffsetEnd > cursor {
+				cursor = *c.OffsetEnd
+			}
+		} else {
+			// No offsets recorded: fall back to plain concatenation.
+			sb.WriteString(c.Text)
+			sb.WriteString("\n")
+		}
+	}
+
+	full := []rune(sb.String())
+	total := len(full)
+	start := charOffset
+	if start < 0 {
+		start = 0
+	}
+	if start > total {
+		start = total
+	}
+	end := start + maxChars
+	if maxChars <= 0 || end > total {
+		end = total
+	}
+	truncated := end < total
+	next := 0
+	if truncated {
+		next = end
+	}
+	return &DocumentTextResponse{
+		FileID: fileID, Text: string(full[start:end]),
+		Truncated: truncated, TotalChars: total, NextOffset: next,
+	}, nil
 }
