@@ -46,6 +46,19 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 				"required": []string{"file_id", "kind", "chunk_no"},
 			},
 		},
+		map[string]any{
+			"name":        "read_document",
+			"description": "Read a document's full extracted text by file_id, reconstructed from the index with [Page N] markers. Use after nimoos_search returns a file_id when you need the whole document, not just a snippet. Long documents are truncated: page with `offset`=next_offset, or prefer nimoos_search for targeted lookups.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_id":   map[string]any{"type": "string"},
+					"offset":    map[string]any{"type": "integer", "default": 0, "description": "Character offset to start from (for paging long documents)."},
+					"max_chars": map[string]any{"type": "integer", "default": 24000, "description": "Maximum characters to return."},
+				},
+				"required": []string{"file_id"},
+			},
+		},
 	}}
 }
 
@@ -108,6 +121,25 @@ func (a *AgentTools) Invoke(ctx context.Context, name string,
 		return map[string]any{
 			"file_id": out.FileID, "kind": out.Kind,
 			"anchor_chunk_no": out.AnchorChunkNo, "chunks": out.Chunks,
+		}, nil
+	case "read_document":
+		fileID, _ := args["file_id"].(string)
+		offset := 0
+		if v, ok := args["offset"].(float64); ok {
+			offset = int(v)
+		}
+		maxChars := 24000
+		if v, ok := args["max_chars"].(float64); ok {
+			maxChars = int(v)
+		}
+		out, err := a.Authz.GetDocumentText(ctx, fileID, allowedRoots, offset, maxChars)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"file_id": out.FileID, "text": out.Text,
+			"truncated": out.Truncated, "total_chars": out.TotalChars,
+			"next_offset": out.NextOffset,
 		}, nil
 	}
 	return nil, errors.New("unknown tool: " + name)
