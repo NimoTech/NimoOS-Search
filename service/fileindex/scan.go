@@ -57,13 +57,13 @@ func (i *Index) ScanInto(dir string) error {
 		}
 		base := filepath.Base(p)
 		if d.IsDir() {
-			if p != dir && skipDir(base) {
+			if p != dir && (skipDir(base) || i.excluded(p)) {
 				return filepath.SkipDir
 			}
 			if p == dir {
 				return nil // don't index the scan root itself
 			}
-		} else if skipFile(base) {
+		} else if skipFile(base) || i.excluded(p) {
 			return nil
 		}
 		return i.Upsert(recordFor(p, rootOf, d))
@@ -83,13 +83,13 @@ func (i *Index) Reconcile(root string) error {
 		}
 		base := filepath.Base(p)
 		if d.IsDir() {
-			if p != root && skipDir(base) {
+			if p != root && (skipDir(base) || i.excluded(p)) {
 				return filepath.SkipDir
 			}
 			if p == root {
 				return nil
 			}
-		} else if skipFile(base) {
+		} else if skipFile(base) || i.excluded(p) {
 			return nil
 		}
 		onDisk[p] = struct{}{}
