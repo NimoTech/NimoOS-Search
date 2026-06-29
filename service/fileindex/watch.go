@@ -52,7 +52,7 @@ func (w *Watcher) handleEvent(op fsnotify.Op, name string) {
 			return
 		}
 		if fi.IsDir() {
-			if !skipDir(filepath.Base(name)) {
+			if !skipDir(filepath.Base(name)) && !w.idx.excluded(name) {
 				w.addWatchRecursive(name)
 				// ScanInto skips its own root, so index the new dir itself too.
 				_ = w.idx.Upsert(Record{
@@ -117,7 +117,7 @@ func (w *Watcher) addWatchRecursive(dir string) {
 		if w.degraded.Load() {
 			return filepath.SkipAll
 		}
-		if p != dir && skipDir(filepath.Base(p)) {
+		if p != dir && (skipDir(filepath.Base(p)) || w.idx.excluded(p)) {
 			return filepath.SkipDir
 		}
 		if aerr := w.add(p); aerr != nil {

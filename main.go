@@ -164,6 +164,7 @@ func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.Even
 	if err != nil {
 		return nil, err
 	}
+	idx.SetExcludes(cfg.FileIndexExclude) // never index NimoOS system mounts under /mnt, /media
 	normal := time.Duration(s.FileIndexScanIntervalH) * time.Hour
 	if normal <= 0 {
 		normal = 6 * time.Hour

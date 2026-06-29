@@ -33,6 +33,7 @@ type Config struct {
 	// fileindex
 	FileIndexEnabled               bool
 	FileIndexRoots                 []string
+	FileIndexExclude               []string
 	FileIndexDBPath                string
 	FileIndexScanIntervalH         int
 	FileIndexDegradedScanIntervalH int
@@ -73,6 +74,11 @@ func defaults() Config {
 		LogPath:                        "/var/log/nimoos",
 		FileIndexEnabled:               true,
 		FileIndexRoots:                 []string{"/DATA", "/mnt", "/media"},
+		// NimoOS overlay-root system mounts that live under /mnt and /media.
+		// They expose the whole OS root filesystem and system partitions; left in,
+		// the boot scan indexes hundreds of thousands of system files and pegs a
+		// CPU core for many minutes. Excluded by default; override via [fileindex] Exclude.
+		FileIndexExclude:               []string{"/media/root-ro", "/media/root-rw", "/mnt/overlay", "/mnt/metadata"},
 		FileIndexDBPath:                "/var/lib/nimoos/db/search.db",
 		FileIndexScanIntervalH:         6,
 		FileIndexDegradedScanIntervalH: 1,
@@ -170,6 +176,9 @@ func applyINI(f *ini.File, c *Config) {
 		}
 		if k, _ := s.GetKey("Roots"); k != nil {
 			c.FileIndexRoots = k.Strings(",")
+		}
+		if k, _ := s.GetKey("Exclude"); k != nil {
+			c.FileIndexExclude = k.Strings(",")
 		}
 		if k, _ := s.GetKey("DBPath"); k != nil {
 			c.FileIndexDBPath = k.String()

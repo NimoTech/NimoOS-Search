@@ -7,6 +7,7 @@ package fileindex
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -35,9 +36,10 @@ type FileNameHit struct {
 }
 
 type Index struct {
-	db    *sql.DB
-	ftsOK bool
-	ready atomic.Bool
+	db       *sql.DB
+	ftsOK    bool
+	ready    atomic.Bool
+	excludes []string // absolute, cleaned paths whose subtrees are never indexed/watched
 }
 
 // Open opens (creating if needed) the SQLite database at path with WAL +
@@ -84,6 +86,31 @@ CREATE INDEX IF NOT EXISTS idx_file_index_root ON file_index(root);
 }
 
 func (i *Index) Close() error { return i.db.Close() }
+
+// SetExcludes records absolute paths whose subtrees must never be indexed or
+// watched — e.g. NimoOS system mounts (root-ro/root-rw/overlay/metadata) that
+// live under the /mnt and /media scan roots and would otherwise pull the whole
+// OS root filesystem into the index. Paths are filepath.Clean'd; blanks dropped.
+func (i *Index) SetExcludes(paths []string) {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p = strings.TrimSpace(p); p == "" {
+			continue
+		}
+		out = append(out, filepath.Clean(p))
+	}
+	i.excludes = out
+}
+
+// excluded reports whether p is, or is nested under, any excluded path.
+func (i *Index) excluded(p string) bool {
+	for _, e := range i.excludes {
+		if p == e || strings.HasPrefix(p, e+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 func (i *Index) Status() string {
 	if i.ready.Load() {
