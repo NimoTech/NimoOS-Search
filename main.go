@@ -101,11 +101,16 @@ func newParserClient(cfg config.Config) (*service.ParserClient, error) {
 }
 
 func newWikiClient(cfg config.Config) (*service.WikiClient, error) {
-	// Per spec §6.1: clients go through the public Gateway (default :80).
-	// cfg.GatewayDiscoveryPath points at the management API (used by
-	// startListener for route registration), not the public proxy, so we
-	// don't read it here.
-	return service.NewWikiClient("http://127.0.0.1", cfg.WikiTimeoutSec,
+	// The Gateway refuses every /_internal/ path (NimoOS-Gateway e2c9b9c), so
+	// user-roots must go direct to the Wiki service via its discovery file,
+	// same as ParserClient. Wiki binds a random port, so there is no useful
+	// static fallback; if the file is absent the client stays wired but every
+	// call fails, and routes degrade to 503 exactly as before.
+	base, err := readDiscoveryURL(cfg.WikiDiscoveryPath, "http://127.0.0.1")
+	if err != nil {
+		return nil, err
+	}
+	return service.NewWikiClient(base, cfg.WikiTimeoutSec,
 		time.Duration(cfg.UserRootsCacheTTLSec)*time.Second), nil
 }
 
