@@ -22,7 +22,7 @@ func TestGetAgentTools(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	var got map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
-	require.Len(t, got["tools"].([]any), 2)
+	require.Len(t, got["tools"].([]any), 3)
 }
 
 func TestPostAgentTool_UnknownReturns400(t *testing.T) {
