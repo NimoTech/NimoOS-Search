@@ -1,6 +1,6 @@
 # NimoOS-Search
 
-NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索引、图片搜索三路来源聚合为统一的查询入口,同时作为 AI Agent 的 search/read_file_chunk 工具后端。当前版本 `v1.9.0-alpha1`。
+NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索引、图片搜索三路来源聚合为统一的查询入口,同时作为 AI Agent 的 `nimoos_search` / `read_file_chunk` / `read_document` 工具后端。当前版本 `v1.9.0-alpha1`。
 
 绑定 localhost、由 Gateway 转发,API 前缀 `/v1/search`。
 
@@ -38,7 +38,8 @@ NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索�
         ▼
   ┌──────────────┐
   │ NimoOS-Wiki  │
-  │ Gateway:80   │
+  │ wiki.url     │
+  │ 服务发现直连  │
   │ /v1/wiki/    │
   │ _internal/   │
   │ user-roots   │
@@ -62,8 +63,8 @@ NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索�
 | POST | `/v1/search/text` | 语义检索(embed → Qdrant → rerank → expand) |
 | GET | `/v1/search/file` | 获取文件全部 chunks(按 `file_id`,分页) |
 | GET | `/v1/search/chunk` | 获取指定 chunk 及上下文窗口(±window) |
-| GET | `/v1/search/agent/tools` | 返回 Agent 可用工具的 OpenAI function schema |
-| POST | `/v1/search/agent/tool` | 分发 Agent 工具调用(`nimoos_search` / `read_file_chunk`) |
+| GET | `/v1/search/agent/tools` | 返回 Agent 可用工具的 OpenAI function schema(当前 3 个) |
+| POST | `/v1/search/agent/tool` | 分发 Agent 工具调用(`nimoos_search` / `read_file_chunk` / `read_document`) |
 | GET | `/v1/search/agent/filters-schema` | 返回 filters 参数的 JSON Schema |
 | POST | `/v1/search/visual` | 图片语义搜索(代理 NimoOS-Photos;未发现时 503) |
 | GET | `/v1/search/settings` | 获取运行时可调设置 |
@@ -90,7 +91,13 @@ NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索�
 
 `sources` 为空时使用 `default_sources`(默认三路全开)。聚合结果总条目上限由 `max_total_results`(默认 15)按 1/3 比例均等截断。
 
-**Agent 工具 `nimoos_search`**:调用 `Aggregator.Aggregate()`,返回 `groups.{semantic, filenames, images}`,每个 Hit 截断路径至 3 条、preview 至 200 字符,保护 LLM 上下文窗口。
+**Agent 工具**(`service/agent_tools.go`,`Invoke()` 分发,route 层注入 allowedRoots 保证不越权):
+
+| 工具 | 作用 |
+|---|---|
+| `nimoos_search` | 调用 `Aggregator.Aggregate()`,返回 `groups.{semantic, filenames, images}`,每个 Hit 截断路径至 3 条、preview 至 200 字符,保护 LLM 上下文窗口 |
+| `read_file_chunk` | 按 `file_id + kind + chunk_no` 取 chunk 及 ±window 上下文(`AuthzService.GetChunkWindow`) |
+| `read_document` | 按 `file_id` 重建**全文**(file-reader M1):`AuthzService.GetDocumentText` 从 Qdrant `ScrollByFileID` 拉取全部 body chunks 按 chunk_no 拼接,页码变化处插入 `[Page N]` 标记;参数 `offset` / `max_chars`(默认 24000)分页,响应带 `truncated` / `total_chars` / `next_offset` |
 
 ---
 
@@ -136,6 +143,8 @@ SQLite 表 `file_index`,可选 FTS5 trigram 加速,存储文件的 path / name /
 
 **跳过规则**:隐藏文件(`.` 开头)、`node_modules`、`@eaDir`(Synology 专有目录)、`.git`、`__pycache__`。
 
+**系统挂载点排除**(`Index.SetExcludes`,`service/fileindex/index.go`):`[fileindex] Exclude` 配置一组绝对路径子树,默认排除 NimoOS overlay-root 的系统挂载 `/media/root-ro`、`/media/root-rw`、`/mnt/overlay`、`/mnt/metadata` —— 否则扫描 `/mnt` / `/media` 会把整个 OS 根文件系统(数十万系统文件)索引进来,每次重启/周期扫描都跑满一个 CPU 核数十分钟。排除集在 BootScan / ScanInto / Reconcile 及 watcher(递归添加 watch + Create 事件)全部生效;Reconcile 会删掉落入新排除子树的存量行,升级后旧索引自清理。
+
 ---
 
 ## 运行时可调设置(`SearchSettings`)
@@ -173,12 +182,14 @@ SQLite 表 `file_index`,可选 FTS5 trigram 加速,存储文件的 path / name /
 |---|---|---|---|
 | **NimoOS-Parser** | HTTP | embed(BGE-M3)/ rerank(BGE-Reranker-v2-m3)/ expand_files | `/var/run/nimoos/parser.url` |
 | **Qdrant** | gRPC `:6334` | 向量混合检索(只读),集合 `text_chunks` | 配置 `QdrantURL`/`QdrantGRPCPort` |
-| **NimoOS-Wiki** | HTTP via Gateway `:80` | 获取用户可访问 root_ids | 固定 `http://127.0.0.1` |
+| **NimoOS-Wiki** | HTTP 直连 | 获取用户可访问 root_ids(`/v1/wiki/_internal/user-roots`) | `/var/run/nimoos/wiki.url` |
 | **NimoOS-Photos** | HTTP | 图片语义搜索代理 | `/var/run/nimoos/photos.url`(可选) |
 | **NimoOS-Gateway** | HTTP | 路由注册 (`POST /v1/gateway/routes`) | `/var/run/nimoos/management.url` |
 | **NimoOS-MessageBus** | Unix socket | 发布警告/KPI 事件(best-effort) | `/var/run/nimoos/message-bus.sock` |
 
 Photos 未发现时服务正常启动,`/v1/search/visual` 返回 503,聚合的 `images` 来源自动跳过。
+
+> **Wiki 不再走公网 Gateway**:Gateway 已拒绝所有 `/_internal/` 路径(NimoOS-Gateway e2c9b9c),user-roots 改为读 `WikiDiscoveryPath`(`wiki.url`)直连 Wiki 服务,与 ParserClient 同法(`main.go` `newWikiClient`)。发现文件缺失时客户端仍装配,但每次调用失败,数据端点降级为 503。
 
 ---
 
@@ -240,6 +251,8 @@ MessageBusSocket     = /var/run/nimoos/message-bus.sock
 [fileindex]
 Enabled            = true
 Roots              = /DATA,/mnt,/media
+; 永不索引/监视的子树,默认 NimoOS overlay-root 系统挂载
+Exclude            = /media/root-ro,/media/root-rw,/mnt/overlay,/mnt/metadata
 DBPath             = /var/lib/nimoos/db/search.db
 ScanIntervalH      = 6
 DegradedScanIntervalH = 1
@@ -286,14 +299,14 @@ systemd 单元使用 `Type=notify`,`SdNotify(Ready)` 在 Gateway 注册成功后
 | `route/v1/` | Echo 路由注册;`middleware.go` 注入 User-ID;各端点处理器 |
 | `service/search.go` | 语义检索五段流水线(embed → Qdrant → rerank → sort → expand) |
 | `service/aggregate.go` | 三路并发聚合 + 比例截断 |
-| `service/authz.go` | file/chunk 鉴权(root_id 交集校验) |
+| `service/authz.go` | file/chunk 鉴权(root_id 交集校验)+ `GetDocumentText` 全文重建 |
 | `service/fileindex/` | SQLite 文件名索引:Index / Scan / Watch / Subsystem |
 | `service/settings.go` | 运行时设置读写(RWMutex + 原子文件写入) |
 | `service/parser_client.go` | Parser HTTP 客户端:embed / rerank / expand_files |
 | `service/wiki_client.go` | Wiki HTTP 客户端:user-roots(60s LRU 缓存) |
 | `service/qdrant_client.go` | Qdrant gRPC 客户端:hybrid search / scroll |
 | `service/photos_client.go` | Photos HTTP 代理客户端:smart_search |
-| `service/agent_tools.go` | Agent tool schema + `nimoos_search`/`read_file_chunk` dispatch |
+| `service/agent_tools.go` | Agent tool schema + `nimoos_search`/`read_file_chunk`/`read_document` dispatch |
 | `service/eventbus.go` | MessageBus Unix socket best-effort 发布;KPI 计数器 |
 | `service/cache.go` | Embed LRU 缓存 + singleflight 并发去重 |
 | `config/config.go` | INI + 环境变量配置加载 |
