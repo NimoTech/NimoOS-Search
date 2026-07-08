@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/NimoTech/NimoOS-Common/middleware"
 	"github.com/NimoTech/NimoOS-Search/common"
 	"github.com/NimoTech/NimoOS-Search/config"
 	v1 "github.com/NimoTech/NimoOS-Search/route/v1"
@@ -252,6 +253,7 @@ func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzServ
 		deps.Photos = p
 	}
 	e.GET("/healthz", v1.Healthz)
+	middleware.RegisterVersionRoute(e, "/v1/search/version", "Search", common.Version)
 	v1.RegisterText(e, deps)
 	v1.RegisterFile(e, deps)
 	v1.RegisterChunk(e, deps)
