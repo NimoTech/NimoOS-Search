@@ -107,3 +107,32 @@ func TestAggregate_ReadsLiveSettings(t *testing.T) {
 	require.Empty(t, resp.Groups.Semantic, "DefaultSources=[images] → semantic skipped when request omits sources")
 	require.Len(t, resp.Groups.Images, 1)
 }
+
+type fakeNotesSearcher struct {
+	hits []NoteHit
+	err  error
+}
+
+func (f fakeNotesSearcher) Query(context.Context, string, int, string) ([]NoteHit, error) {
+	return f.hits, f.err
+}
+
+func TestAggregate_NotesGroupIncluded(t *testing.T) {
+	agg := newAggForTest(nil, nil)
+	agg.Notes = fakeNotesSearcher{hits: []NoteHit{{NoteID: "n1", Score: 0.9}}}
+	agg.Settings.cur.DefaultSources = []string{"semantic", "notes"}
+	agg.Settings.cur.NotesTopK = 5
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "q", UserID: "1"})
+	require.Len(t, resp.Groups.Notes, 1)
+	require.Equal(t, "n1", resp.Groups.Notes[0].NoteID)
+}
+
+func TestAggregate_NotesFailureDegrades(t *testing.T) {
+	agg := newAggForTest(nil, nil)
+	agg.Notes = fakeNotesSearcher{err: context.DeadlineExceeded}
+	agg.Settings.cur.DefaultSources = []string{"notes"}
+	agg.Settings.cur.NotesTopK = 5
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "q", UserID: "1"})
+	require.Contains(t, resp.Warnings, "notes_unavailable")
+	require.Empty(t, resp.Groups.Notes)
+}

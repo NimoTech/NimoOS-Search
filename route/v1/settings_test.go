@@ -19,7 +19,7 @@ import (
 func newSettingsDeps(t *testing.T) *Deps {
 	st, err := service.LoadSettingsStore(t.TempDir()+"/s.json", service.SearchSettings{
 		DefaultSources: []string{"semantic", "filenames", "images"},
-		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15,
+		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, NotesTopK: 5, MaxTotalResults: 15,
 		FileIndexEnabled: true, FileIndexRoots: []string{"/DATA"}, FileIndexScanIntervalH: 6,
 	})
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestPutSettings_RootsChangeHotReloadsNoRestart(t *testing.T) {
 
 	st, err := service.LoadSettingsStore(t.TempDir()+"/s.json", service.SearchSettings{
 		DefaultSources: []string{"semantic", "filenames", "images"},
-		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15,
+		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, NotesTopK: 5, MaxTotalResults: 15,
 		FileIndexEnabled: true, FileIndexRoots: []string{dirA}, FileIndexScanIntervalH: 6,
 	})
 	require.NoError(t, err)

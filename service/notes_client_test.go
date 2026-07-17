@@ -37,3 +37,14 @@ func TestNotesClient_Query_Non200IsError(t *testing.T) {
 	_, err := c.Query(context.Background(), "q", 3, "1")
 	require.Error(t, err)
 }
+
+func TestNotesClient_ZeroTimeoutClampedToDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"hits":[]}`))
+	}))
+	defer srv.Close()
+	c := NewNotesClient(srv.URL, 0)
+	hits, err := c.Query(context.Background(), "q", 3, "1")
+	require.NoError(t, err)
+	require.Empty(t, hits)
+}

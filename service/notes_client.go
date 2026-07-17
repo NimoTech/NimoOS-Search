@@ -28,6 +28,9 @@ type NotesClient struct {
 }
 
 func NewNotesClient(base string, timeoutSec int) *NotesClient {
+	if timeoutSec <= 0 {
+		timeoutSec = 5
+	}
 	return &NotesClient{base: base,
 		http: &http.Client{Timeout: time.Duration(timeoutSec) * time.Second}}
 }
