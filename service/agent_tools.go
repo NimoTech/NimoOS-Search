@@ -16,15 +16,15 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 	return map[string]any{"tools": []any{
 		map[string]any{
 			"name":        "nimoos_search",
-			"description": "Unified search over the user's NAS: by content (semantic), by filename, and photos — returns grouped candidates for the user to pick from. Narrow with `sources`, e.g. [\"images\"] for photos only.",
+			"description": "Unified search over the user's NAS: by content (semantic), by filename, photos, and knowledge notes — returns grouped candidates for the user to pick from. Narrow with `sources`, e.g. [\"images\"] for photos only.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]any{"type": "string"},
 					"sources": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"semantic", "filenames", "images"}},
-						"description": "Which sources to search; omit for all three. Pass [\"images\"] to search photos only.",
+						"items":       map[string]any{"type": "string", "enum": []string{"semantic", "filenames", "images", "notes"}},
+						"description": "Which sources to search; omit for all four. Pass [\"images\"] to search photos only.",
 					},
 					"filters": map[string]any{"type": "object", "description": "Applies to the semantic source only."},
 					"top_k":   map[string]any{"type": "integer", "default": 5, "minimum": 1, "maximum": 20, "description": "Per-source cap."},

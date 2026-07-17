@@ -45,6 +45,7 @@ type Config struct {
 	AggSemanticTopK    int
 	AggFilenameTopK    int
 	AggImageTopK       int
+	AggNotesTopK       int
 	AggMaxTotalResults int
 
 	// runtime-mutable settings overlay
@@ -86,6 +87,7 @@ func defaults() Config {
 		AggSemanticTopK:                5,
 		AggFilenameTopK:                5,
 		AggImageTopK:                   5,
+		AggNotesTopK:                   5,
 		AggMaxTotalResults:             15,
 		SettingsPath:                   "/var/lib/nimoos/search-settings.json",
 	}
@@ -204,6 +206,9 @@ func applyINI(f *ini.File, c *Config) {
 		}
 		if k, _ := s.GetKey("ImageTopK"); k != nil {
 			c.AggImageTopK, _ = k.Int()
+		}
+		if k, _ := s.GetKey("NotesTopK"); k != nil {
+			c.AggNotesTopK, _ = k.Int()
 		}
 		if k, _ := s.GetKey("MaxTotalResults"); k != nil {
 			c.AggMaxTotalResults, _ = k.Int()

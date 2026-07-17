@@ -63,6 +63,7 @@ func main() {
 			newSettingsStore,
 			newFileIndex,
 			newPhotosClient,
+			newNotesClient,
 			newAggregator,
 			newAuthzService,
 			newAgentTools,
@@ -147,10 +148,11 @@ func newAuthzService(q *service.QdrantClient) *service.AuthzService {
 
 func newSettingsStore(cfg config.Config) (*service.SettingsStore, error) {
 	return service.LoadSettingsStore(cfg.SettingsPath, service.SearchSettings{
-		DefaultSources:         []string{"semantic", "filenames", "images"},
+		DefaultSources:         []string{"semantic", "filenames", "images", "notes"},
 		SemanticTopK:           cfg.AggSemanticTopK,
 		FilenameTopK:           cfg.AggFilenameTopK,
 		ImageTopK:              cfg.AggImageTopK,
+		NotesTopK:              cfg.AggNotesTopK,
 		MaxTotalResults:        cfg.AggMaxTotalResults,
 		FileIndexEnabled:       cfg.FileIndexEnabled,
 		FileIndexRoots:         cfg.FileIndexRoots,
@@ -199,7 +201,15 @@ func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
 	return service.NewPhotosClient(base, 5), nil
 }
 
-func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, st *service.SettingsStore) *service.Aggregator {
+func newNotesClient(cfg config.Config) (*service.NotesClient, error) {
+	base, err := readDiscoveryURL(cfg.ParserDiscoveryPath, "") // same discovery source as ParserClient
+	if err != nil || base == "" {
+		return nil, nil
+	}
+	return service.NewNotesClient(base, 5), nil
+}
+
+func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, n *service.NotesClient, st *service.SettingsStore) *service.Aggregator {
 	agg := &service.Aggregator{Search: s, Settings: st}
 	// Assign through interfaces only when non-nil, so a nil *T doesn't become a
 	// non-nil interface (Go typed-nil trap) that breaks the `== nil` checks.
@@ -208,6 +218,9 @@ func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *servic
 	}
 	if p != nil {
 		agg.Photos = p
+	}
+	if n != nil {
+		agg.Notes = n
 	}
 	return agg
 }

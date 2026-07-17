@@ -17,6 +17,7 @@ type SearchSettings struct {
 	SemanticTopK           int      `json:"semantic_top_k"`
 	FilenameTopK           int      `json:"filename_top_k"`
 	ImageTopK              int      `json:"image_top_k"`
+	NotesTopK              int      `json:"notes_top_k"`
 	MaxTotalResults        int      `json:"max_total_results"`
 	FileIndexEnabled       bool     `json:"fileindex_enabled"`
 	FileIndexRoots         []string `json:"fileindex_roots"`
@@ -30,6 +31,7 @@ type SearchSettingsPatch struct {
 	SemanticTopK           *int      `json:"semantic_top_k"`
 	FilenameTopK           *int      `json:"filename_top_k"`
 	ImageTopK              *int      `json:"image_top_k"`
+	NotesTopK              *int      `json:"notes_top_k"`
 	MaxTotalResults        *int      `json:"max_total_results"`
 	FileIndexEnabled       *bool     `json:"fileindex_enabled"`
 	FileIndexRoots         *[]string `json:"fileindex_roots"`
@@ -48,6 +50,9 @@ func (s SearchSettings) ApplyPatch(p SearchSettingsPatch) SearchSettings {
 	}
 	if p.ImageTopK != nil {
 		s.ImageTopK = *p.ImageTopK
+	}
+	if p.NotesTopK != nil {
+		s.NotesTopK = *p.NotesTopK
 	}
 	if p.MaxTotalResults != nil {
 		s.MaxTotalResults = *p.MaxTotalResults
@@ -69,7 +74,7 @@ func (s SearchSettings) ApplyPatch(p SearchSettingsPatch) SearchSettings {
 // 500 (persist failure).
 func (s SearchSettings) Validate() error { return validate(s) }
 
-var validSources = map[string]bool{"semantic": true, "filenames": true, "images": true}
+var validSources = map[string]bool{"semantic": true, "filenames": true, "images": true, "notes": true}
 
 func validate(in SearchSettings) error {
 	if len(in.DefaultSources) == 0 {
@@ -80,7 +85,7 @@ func validate(in SearchSettings) error {
 			return fmt.Errorf("invalid source %q", s)
 		}
 	}
-	for name, v := range map[string]int{"semantic_top_k": in.SemanticTopK, "filename_top_k": in.FilenameTopK, "image_top_k": in.ImageTopK} {
+	for name, v := range map[string]int{"semantic_top_k": in.SemanticTopK, "filename_top_k": in.FilenameTopK, "image_top_k": in.ImageTopK, "notes_top_k": in.NotesTopK} {
 		if v < 1 || v > 20 {
 			return fmt.Errorf("%s must be in [1,20]", name)
 		}

@@ -18,6 +18,11 @@ type ImageSearcher interface {
 	SmartSearch(ctx context.Context, query string, topK int, userID string) ([]ImageHit, error)
 }
 
+// NotesSearcher is satisfied by *NotesClient (nil if Parser undiscovered).
+type NotesSearcher interface {
+	Query(ctx context.Context, query string, topK int, userID string) ([]NoteHit, error)
+}
+
 type AggregateRequest struct {
 	Query        string
 	Sources      []string // empty → falls back to SettingsStore.DefaultSources
@@ -30,6 +35,7 @@ type AggregateGroups struct {
 	Semantic  []any                   `json:"semantic"`
 	Filenames []fileindex.FileNameHit `json:"filenames"`
 	Images    []ImageHit              `json:"images"`
+	Notes     []NoteHit               `json:"notes"`
 }
 
 type AggregateResponse struct {
@@ -42,6 +48,7 @@ type Aggregator struct {
 	Search    *SearchService
 	FileIndex FileNameSearcher
 	Photos    ImageSearcher
+	Notes     NotesSearcher
 	Settings  *SettingsStore
 }
 
@@ -74,6 +81,8 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 		fileWarn string
 		imgHits  []ImageHit
 		imgWarn  string
+		noteHits []NoteHit
+		noteWarn string
 	)
 	g := new(errgroup.Group)
 	if wants(sources, "semantic") && a.Search != nil {
@@ -114,11 +123,23 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 			return nil
 		})
 	}
+	if wants(sources, "notes") && a.Notes != nil {
+		g.Go(func() error {
+			h, err := a.Notes.Query(ctx, req.Query, st.NotesTopK, req.UserID)
+			if err != nil {
+				noteWarn = "notes_unavailable"
+				return nil
+			}
+			noteHits = h
+			return nil
+		})
+	}
 	_ = g.Wait()
 	resp.Groups.Semantic = semHits
 	resp.Groups.Filenames = fileHits
 	resp.Groups.Images = imgHits
-	for _, w := range []string{semWarn, fileWarn, imgWarn} {
+	resp.Groups.Notes = noteHits
+	for _, w := range []string{semWarn, fileWarn, imgWarn, noteWarn} {
 		if w != "" {
 			resp.Warnings = append(resp.Warnings, w)
 		}
@@ -129,7 +150,7 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 		status = a.FileIndex.Status()
 	}
 	resp.Stats["fileindex_status"] = status
-	resp.Stats["total_candidates"] = len(resp.Groups.Semantic) + len(resp.Groups.Filenames) + len(resp.Groups.Images)
+	resp.Stats["total_candidates"] = len(resp.Groups.Semantic) + len(resp.Groups.Filenames) + len(resp.Groups.Images) + len(resp.Groups.Notes)
 	return resp
 }
 
@@ -139,11 +160,11 @@ func applyTotalCap(resp *AggregateResponse, max int) {
 	if max <= 0 {
 		return
 	}
-	total := len(resp.Groups.Semantic) + len(resp.Groups.Filenames) + len(resp.Groups.Images)
+	total := len(resp.Groups.Semantic) + len(resp.Groups.Filenames) + len(resp.Groups.Images) + len(resp.Groups.Notes)
 	if total <= max {
 		return
 	}
-	per := max / 3
+	per := max / 4
 	if per < 1 {
 		per = 1
 	}
@@ -155,5 +176,8 @@ func applyTotalCap(resp *AggregateResponse, max int) {
 	}
 	if len(resp.Groups.Images) > per {
 		resp.Groups.Images = resp.Groups.Images[:per]
+	}
+	if len(resp.Groups.Notes) > per {
+		resp.Groups.Notes = resp.Groups.Notes[:per]
 	}
 }

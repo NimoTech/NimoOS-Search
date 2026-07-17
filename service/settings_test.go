@@ -11,7 +11,7 @@ import (
 func defaultsForTest() SearchSettings {
 	return SearchSettings{
 		DefaultSources: []string{"semantic", "filenames", "images"},
-		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, MaxTotalResults: 15,
+		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, NotesTopK: 5, MaxTotalResults: 15,
 		FileIndexEnabled: true, FileIndexRoots: []string{"/DATA"}, FileIndexScanIntervalH: 6,
 	}
 }

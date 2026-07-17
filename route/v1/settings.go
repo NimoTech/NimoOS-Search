@@ -19,7 +19,7 @@ func RegisterSettings(e *echo.Echo, d *Deps) {
 	e.GET("/v1/search/fileindex/status", getFileindexStatus(d))
 }
 
-var runtimeFields = []string{"default_sources", "semantic_top_k", "filename_top_k", "image_top_k", "max_total_results", "fileindex_roots"}
+var runtimeFields = []string{"default_sources", "semantic_top_k", "filename_top_k", "image_top_k", "notes_top_k", "max_total_results", "fileindex_roots"}
 var restartFields = []string{"fileindex_enabled", "fileindex_scan_interval_h"}
 
 func getSettings(d *Deps) echo.HandlerFunc {

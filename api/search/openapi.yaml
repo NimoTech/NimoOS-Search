@@ -291,6 +291,31 @@ components:
         thumbnail_url:
           type: string
           description: Relative URL to the small thumbnail, e.g. /v1/photos/assets/{id}/thumbnail?size=small
+    NoteHit:
+      type: object
+      description: One knowledge-notes candidate returned by the notes source
+      properties:
+        note_id:
+          type: string
+          description: Unique identifier of the note
+        chunk_no:
+          type: integer
+          description: Chunk index within the note
+        text:
+          type: string
+          description: Matched chunk text
+        type:
+          type: string
+          description: Note type
+        status:
+          type: string
+          description: Note lifecycle status (draft, curated; archived notes are excluded)
+        updated_at:
+          type: integer
+          description: Last-updated timestamp in Unix milliseconds
+        score:
+          type: number
+          description: Similarity score
     FileNameHit:
       type: object
       description: One filename-index candidate returned by the filenames source
@@ -320,7 +345,7 @@ components:
       type: object
       description: >
         Aggregated result from the unified nimoos_search tool. Groups candidates
-        by source (semantic, filenames, images). A source that is unavailable or
+        by source (semantic, filenames, images, notes). A source that is unavailable or
         not requested returns an empty array; a warning string is appended.
       properties:
         groups:
@@ -339,6 +364,10 @@ components:
               type: array
               description: Hits from the Photos smart-search proxy
               items: { $ref: '#/components/schemas/ImageHit' }
+            notes:
+              type: array
+              description: Hits from the knowledge-notes source (via Parser)
+              items: { $ref: '#/components/schemas/NoteHit' }
         stats:
           type: object
           description: Diagnostic counters (fileindex_status, total_candidates, etc.)
@@ -347,7 +376,7 @@ components:
           type: array
           description: >
             Per-source degradation warnings, e.g. "semantic_unavailable",
-            "filenames_unavailable", "images_unavailable".
+            "filenames_unavailable", "images_unavailable", "notes_unavailable".
           items:
             type: string
   responses:
