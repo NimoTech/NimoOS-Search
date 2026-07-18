@@ -174,6 +174,8 @@ func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.Even
 		return nil, err
 	}
 	idx.SetExcludes(cfg.FileIndexExclude) // never index NimoOS system mounts under /mnt, /media
+	idx.ThrottleEvery = cfg.FileIndexWalkThrottleEvery
+	idx.ThrottleSleep = time.Duration(cfg.FileIndexWalkThrottleSleepMs) * time.Millisecond
 	normal := time.Duration(s.FileIndexScanIntervalH) * time.Hour
 	if normal <= 0 {
 		normal = 6 * time.Hour

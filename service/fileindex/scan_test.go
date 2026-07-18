@@ -17,7 +17,7 @@ func TestBootScan_IndexesTreeSkippingHidden(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".hidden"), []byte("z"), 0644))
 
 	idx := openTmp(t)
-	require.NoError(t, idx.BootScan([]string{root}))
+	require.NoError(t, idx.BootScan(context.Background(), []string{root}))
 
 	hits, err := idx.Search(context.Background(), "beta", 10)
 	require.NoError(t, err)
@@ -39,7 +39,7 @@ func TestBootScan_SkipsExcludedSubtree(t *testing.T) {
 
 	idx := openTmp(t)
 	idx.SetExcludes([]string{sysmount})
-	require.NoError(t, idx.BootScan([]string{root}))
+	require.NoError(t, idx.BootScan(context.Background(), []string{root}))
 
 	hits, err := idx.Search(context.Background(), "alpha", 10)
 	require.NoError(t, err)
@@ -57,12 +57,12 @@ func TestReconcile_DropsRowsUnderNewlyExcludedSubtree(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(sysmount, "sysfile.txt"), []byte("y"), 0644))
 
 	idx := openTmp(t)
-	require.NoError(t, idx.BootScan([]string{root})) // indexes everything, no excludes yet
+	require.NoError(t, idx.BootScan(context.Background(), []string{root})) // indexes everything, no excludes yet
 	pre, _ := idx.Search(context.Background(), "sysfile", 10)
 	require.Len(t, pre, 1, "precondition: excluded file was indexed before exclusion")
 
 	idx.SetExcludes([]string{sysmount})
-	require.NoError(t, idx.Reconcile(root))
+	require.NoError(t, idx.Reconcile(context.Background(), root))
 
 	h, _ := idx.Search(context.Background(), "sysfile", 10)
 	require.Empty(t, h, "reconcile drops rows that fell into an excluded subtree")
@@ -77,9 +77,9 @@ func TestReconcile_AddsAndRemoves(t *testing.T) {
 	require.NoError(t, os.WriteFile(stale, []byte("x"), 0644))
 
 	idx := openTmp(t)
-	require.NoError(t, idx.BootScan([]string{root}))
+	require.NoError(t, idx.BootScan(context.Background(), []string{root}))
 	require.NoError(t, os.Remove(stale))
-	require.NoError(t, idx.Reconcile(root))
+	require.NoError(t, idx.Reconcile(context.Background(), root))
 
 	n, _ := idx.Count(context.Background())
 	require.Equal(t, 1, n, "reconcile drops the removed file")

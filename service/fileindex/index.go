@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -40,6 +41,13 @@ type Index struct {
 	ftsOK    bool
 	ready    atomic.Bool
 	excludes []string // absolute, cleaned paths whose subtrees are never indexed/watched
+
+	// ThrottleEvery/ThrottleSleep pace ScanInto/Reconcile's WalkDir loop so a
+	// full scan of a huge tree doesn't pin a core: after every ThrottleEvery
+	// visited entries, sleep ThrottleSleep (cancellable via ctx). Zero value on
+	// either field disables throttling entirely.
+	ThrottleEvery int
+	ThrottleSleep time.Duration
 }
 
 // Open opens (creating if needed) the SQLite database at path with WAL +
