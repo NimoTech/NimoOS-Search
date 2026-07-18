@@ -37,6 +37,8 @@ type Config struct {
 	FileIndexDBPath                string
 	FileIndexScanIntervalH         int
 	FileIndexDegradedScanIntervalH int
+	FileIndexWalkThrottleEvery     int
+	FileIndexWalkThrottleSleepMs   int
 
 	// photos proxy
 	PhotosDiscoveryPath string
@@ -83,6 +85,10 @@ func defaults() Config {
 		FileIndexDBPath:                "/var/lib/nimoos/db/search.db",
 		FileIndexScanIntervalH:         6,
 		FileIndexDegradedScanIntervalH: 1,
+		// Throttle the boot scan / reconcile WalkDir loop so indexing a huge tree
+		// doesn't pin a CPU core. Every 1000 entries visited, sleep 50ms.
+		FileIndexWalkThrottleEvery:   1000,
+		FileIndexWalkThrottleSleepMs: 50,
 		PhotosDiscoveryPath:            "/var/run/nimoos/photos.url",
 		AggSemanticTopK:                5,
 		AggFilenameTopK:                5,
@@ -190,6 +196,12 @@ func applyINI(f *ini.File, c *Config) {
 		}
 		if k, _ := s.GetKey("DegradedScanIntervalH"); k != nil {
 			c.FileIndexDegradedScanIntervalH, _ = k.Int()
+		}
+		if k, _ := s.GetKey("WalkThrottleEvery"); k != nil {
+			c.FileIndexWalkThrottleEvery, _ = k.Int()
+		}
+		if k, _ := s.GetKey("WalkThrottleSleepMs"); k != nil {
+			c.FileIndexWalkThrottleSleepMs, _ = k.Int()
 		}
 	}
 	if s := f.Section("photos"); s != nil {

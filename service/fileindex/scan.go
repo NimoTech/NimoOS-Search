@@ -6,7 +6,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// walkThrottle paces a WalkDir loop: after every `every` visited entries it
+// sleeps `sleep` (cancellable via ctx). every<=0 disables throttling (tick
+// still observes ctx cancellation but never sleeps) — this is what keeps a
+// zero-value Index untouched by throttling.
+type walkThrottle struct {
+	every int
+	sleep time.Duration
+	n     int
+}
+
+func (t *walkThrottle) tick(ctx context.Context) error {
+	if t.every <= 0 {
+		return ctx.Err()
+	}
+	t.n++
+	if t.n%t.every != 0 {
+		return ctx.Err()
+	}
+	select {
+	case <-time.After(t.sleep):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // skipDir returns true for hidden or known container dirs we never index.
 func skipDir(base string) bool {
@@ -35,12 +62,12 @@ func recordFor(path, root string, d fs.DirEntry) Record {
 }
 
 // BootScan walks each root and upserts every (non-hidden) entry.
-func (i *Index) BootScan(roots []string) error {
+func (i *Index) BootScan(ctx context.Context, roots []string) error {
 	for _, root := range roots {
 		if _, err := os.Stat(root); err != nil {
 			continue // root not mounted; skip
 		}
-		if err := i.ScanInto(root); err != nil {
+		if err := i.ScanInto(ctx, root); err != nil {
 			return err
 		}
 	}
@@ -48,10 +75,14 @@ func (i *Index) BootScan(roots []string) error {
 }
 
 // ScanInto walks dir and upserts entries (used for boot scan and for new-dir
-// backfill from the watcher).
-func (i *Index) ScanInto(dir string) error {
+// backfill from the watcher). ctx paces the throttle and cancels the walk.
+func (i *Index) ScanInto(ctx context.Context, dir string) error {
+	th := &walkThrottle{every: i.ThrottleEvery, sleep: i.ThrottleSleep}
 	rootOf := dir
 	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if terr := th.tick(ctx); terr != nil {
+			return terr
+		}
 		if err != nil {
 			return nil
 		}
@@ -71,13 +102,18 @@ func (i *Index) ScanInto(dir string) error {
 }
 
 // Reconcile re-walks root, upserts what's on disk, and deletes index rows under
-// root that no longer exist (drift correction).
-func (i *Index) Reconcile(root string) error {
+// root that no longer exist (drift correction). ctx paces the throttle and
+// cancels both the walk and the gone-rows deletion loop.
+func (i *Index) Reconcile(ctx context.Context, root string) error {
 	if _, err := os.Stat(root); err != nil {
 		return nil
 	}
+	th := &walkThrottle{every: i.ThrottleEvery, sleep: i.ThrottleSleep}
 	onDisk := map[string]struct{}{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if terr := th.tick(ctx); terr != nil {
+			return terr
+		}
 		if err != nil {
 			return nil
 		}
@@ -99,7 +135,7 @@ func (i *Index) Reconcile(root string) error {
 		return err
 	}
 	// delete index rows under root that are gone
-	rows, err := i.db.QueryContext(context.Background(),
+	rows, err := i.db.QueryContext(ctx,
 		`SELECT path FROM file_index WHERE path=? OR path LIKE ?`, root, root+"/%")
 	if err != nil {
 		return err
@@ -117,6 +153,9 @@ func (i *Index) Reconcile(root string) error {
 	}
 	rows.Close()
 	for _, p := range gone {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err := i.DeletePrefix(p); err != nil {
 			return err
 		}

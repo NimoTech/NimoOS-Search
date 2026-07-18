@@ -1,6 +1,7 @@
 package fileindex
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -59,7 +60,9 @@ func (w *Watcher) handleEvent(op fsnotify.Op, name string) {
 					Path: name, Name: fi.Name(), Root: w.rootOf(name),
 					IsDir: true, MtimeMs: fi.ModTime().UnixMilli(),
 				})
-				_ = w.idx.ScanInto(name) // backfill cp -r / mv / tar x
+				// context.Background(): new-dir backfill trees are small; no need
+				// to wire this into the subsystem's stop channel.
+				_ = w.idx.ScanInto(context.Background(), name) // backfill cp -r / mv / tar x
 			}
 			return
 		}

@@ -85,6 +85,13 @@ func (s *Subsystem) startIndexing(roots []string) {
 	idx := s.Index
 	normal, degraded := s.normal, s.degraded
 	go func() {
+		// Bridge stop into a context so ScanInto/Reconcile's WalkDir throttling
+		// is cancellable: closing stop (reload/Close) cancels ctx immediately
+		// instead of waiting out an in-flight throttled sleep.
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() { <-stop; cancel() }()
+		defer cancel()
+
 		// Serialize scan work: wait for the previous indexing goroutine (whose
 		// stop is already closed) to release workMu, so concurrent ReloadRoots
 		// never run two full PurgeOutside/BootScan passes at once.
@@ -105,7 +112,7 @@ func (s *Subsystem) startIndexing(roots []string) {
 			return
 		default:
 		}
-		if err := idx.BootScan(roots); err != nil {
+		if err := idx.BootScan(ctx, roots); err != nil {
 			log.Printf("fileindex: boot scan failed: %v", err)
 		}
 		idx.SetReady() // mark ready once the first scan completes (idempotent on reload)
@@ -125,7 +132,7 @@ func (s *Subsystem) startIndexing(roots []string) {
 				return
 			case <-time.After(interval):
 				for _, r := range roots {
-					_ = idx.Reconcile(r)
+					_ = idx.Reconcile(ctx, r)
 				}
 			}
 		}
@@ -181,8 +188,10 @@ func (s *Subsystem) RescanActiveRoots() {
 		return
 	}
 	go func() {
+		// Not wired to the indexing goroutine's stop channel: a manual rescan
+		// isn't superseded by a reload the way the periodic loop is.
 		for _, r := range roots {
-			_ = idx.Reconcile(r)
+			_ = idx.Reconcile(context.Background(), r)
 		}
 	}()
 }
