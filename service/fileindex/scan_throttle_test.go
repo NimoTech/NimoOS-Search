@@ -47,9 +47,12 @@ func TestScanIntoThrottles(t *testing.T) {
 	startU := time.Now()
 	require.NoError(t, idxUnthrottled.ScanInto(context.Background(), root))
 	elapsedUnthrottled := time.Since(startU)
-	// Zero-value throttle fields: no throttling at all. A generous upper bound
-	// well below a single throttle sleep keeps this from flaking under load.
-	require.Less(t, elapsedUnthrottled, 30*time.Millisecond, "unthrottled scan (zero-value fields) should be fast")
+	// Zero-value throttle fields: no throttling at all. Rather than asserting
+	// an absolute upper bound (which flakes under -race, where instrumentation
+	// overhead alone can push 60 in-memory upserts past 30ms), assert the
+	// unthrottled run is demonstrably dominated by the throttled one: it must
+	// take less than half as long, regardless of the absolute machine speed.
+	require.Less(t, elapsedUnthrottled, elapsedThrottled/2, "unthrottled scan (zero-value fields) should be well under half the throttled scan's duration")
 }
 
 func TestScanIntoCancellable(t *testing.T) {
