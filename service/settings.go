@@ -13,6 +13,9 @@ import (
 // five fields are hot (read live by the Aggregator); the FileIndex* fields are
 // persisted but applied on restart (see spec §6).
 type SearchSettings struct {
+	// SchemaVersion tracks one-shot settings migrations. 0/absent = a file
+	// written before the "notes" source existed; see SettingsSchemaVersion.
+	SchemaVersion          int      `json:"schema_version"`
 	DefaultSources         []string `json:"default_sources"`
 	SemanticTopK           int      `json:"semantic_top_k"`
 	FilenameTopK           int      `json:"filename_top_k"`
@@ -76,6 +79,24 @@ func (s SearchSettings) Validate() error { return validate(s) }
 
 var validSources = map[string]bool{"semantic": true, "filenames": true, "images": true, "notes": true}
 
+// SettingsSchemaVersion is stamped into every persisted blob by Put.
+// Version history:
+//
+//	<2: default_sources predates the "notes" source — migrate by
+//	    appending it once at load. A user who later removes "notes"
+//	    does so via Put, which stamps the current version, so their
+//	    choice is never overridden.
+const SettingsSchemaVersion = 2
+
+func containsSource(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 func validate(in SearchSettings) error {
 	if len(in.DefaultSources) == 0 {
 		return fmt.Errorf("default_sources must contain at least one source")
@@ -116,11 +137,27 @@ type SettingsStore struct {
 func LoadSettingsStore(path string, defaults SearchSettings) (*SettingsStore, error) {
 	cur := defaults
 	if b, err := os.ReadFile(path); err == nil {
+		// An absent "schema_version" key must resolve to 0 (old/unversioned
+		// file), not silently inherit the current defaults' version — reset
+		// before unmarshal so json.Unmarshal only sets it when the file says so.
+		cur.SchemaVersion = 0
 		if err := json.Unmarshal(b, &cur); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
 		if len(cur.DefaultSources) == 0 { // file omitted/empty → keep default semantics
 			cur.DefaultSources = defaults.DefaultSources
+		}
+		// Migrate persisted blobs written before the "notes" source existed.
+		// Scoped to the file-read branch: a fresh install (no file) starts
+		// from defaults, which are already at the current schema version, so
+		// it never needs this. In-memory only; no write here — Put is the
+		// only writer of default_sources, and Put stamps the version, so
+		// this stays idempotent across restarts.
+		if cur.SchemaVersion < SettingsSchemaVersion {
+			if len(cur.DefaultSources) > 0 && !containsSource(cur.DefaultSources, "notes") {
+				cur.DefaultSources = append(cur.DefaultSources, "notes")
+			}
+			cur.SchemaVersion = SettingsSchemaVersion
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -138,6 +175,10 @@ func (s *SettingsStore) Get() SearchSettings {
 // every search — is never blocked on I/O), then swaps the in-memory snapshot
 // under a brief write lock. wmu serializes concurrent Puts' file writes.
 func (s *SettingsStore) Put(in SearchSettings) error {
+	// Every write carries the current schema version, regardless of what the
+	// caller (including a client-supplied JSON body merged upstream) set —
+	// schema_version is not a client-patchable field.
+	in.SchemaVersion = SettingsSchemaVersion
 	if err := validate(in); err != nil {
 		return err
 	}

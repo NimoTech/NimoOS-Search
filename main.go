@@ -148,6 +148,7 @@ func newAuthzService(q *service.QdrantClient) *service.AuthzService {
 
 func newSettingsStore(cfg config.Config) (*service.SettingsStore, error) {
 	return service.LoadSettingsStore(cfg.SettingsPath, service.SearchSettings{
+		SchemaVersion:          service.SettingsSchemaVersion,
 		DefaultSources:         []string{"semantic", "filenames", "images", "notes"},
 		SemanticTopK:           cfg.AggSemanticTopK,
 		FilenameTopK:           cfg.AggFilenameTopK,

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -11,6 +12,17 @@ import (
 func defaultsForTest() SearchSettings {
 	return SearchSettings{
 		DefaultSources: []string{"semantic", "filenames", "images"},
+		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, NotesTopK: 5, MaxTotalResults: 15,
+		FileIndexEnabled: true, FileIndexRoots: []string{"/DATA"}, FileIndexScanIntervalH: 6,
+	}
+}
+
+// defaultsWithNotes mirrors main.go's real (post-notes) defaults: all four
+// sources, stamped at the current schema version.
+func defaultsWithNotes() SearchSettings {
+	return SearchSettings{
+		SchemaVersion:  SettingsSchemaVersion,
+		DefaultSources: []string{"semantic", "filenames", "images", "notes"},
 		SemanticTopK:   5, FilenameTopK: 5, ImageTopK: 5, NotesTopK: 5, MaxTotalResults: 15,
 		FileIndexEnabled: true, FileIndexRoots: []string{"/DATA"}, FileIndexScanIntervalH: 6,
 	}
@@ -64,6 +76,51 @@ func TestSettingsStore_ApplyPatchOnlyProvided(t *testing.T) {
 	merged := s.Get().ApplyPatch(SearchSettingsPatch{SemanticTopK: &nine})
 	require.Equal(t, 9, merged.SemanticTopK)
 	require.Equal(t, 5, merged.FilenameTopK, "unprovided fields keep current value")
+}
+
+func TestLoadMigratesPreNotesFile(t *testing.T) {
+	// simulate an old install: no schema_version, 3-source list, customized roots
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{
+        "default_sources": ["semantic","filenames","images"],
+        "semantic_top_k": 7,
+        "fileindex_roots": ["/DATA","/media/RAID"]
+    }`), 0o644))
+	st, err := LoadSettingsStore(path, defaultsWithNotes())
+	require.NoError(t, err)
+	got := st.Get()
+	require.Equal(t, []string{"semantic", "filenames", "images", "notes"}, got.DefaultSources)
+	require.Equal(t, 7, got.SemanticTopK)                                  // user value kept
+	require.Equal(t, []string{"/DATA", "/media/RAID"}, got.FileIndexRoots) // user value kept
+	require.Equal(t, SettingsSchemaVersion, got.SchemaVersion)
+}
+
+func TestLoadRespectsExplicitNotesRemoval(t *testing.T) {
+	// a v2 file without "notes" = the user removed it via PUT; never re-add
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{
+        "schema_version": 2,
+        "default_sources": ["semantic","filenames","images"]
+    }`), 0o644))
+	st, err := LoadSettingsStore(path, defaultsWithNotes())
+	require.NoError(t, err)
+	require.NotContains(t, st.Get().DefaultSources, "notes")
+}
+
+func TestPutStampsSchemaVersion(t *testing.T) {
+	// regardless of what the client sends, the persisted blob carries the current version
+	p := filepath.Join(t.TempDir(), "s.json")
+	s, _ := LoadSettingsStore(p, defaultsForTest())
+	in := s.Get()
+	in.SchemaVersion = 0 // simulate a client/caller not setting it
+	require.NoError(t, s.Put(in))
+	require.Equal(t, SettingsSchemaVersion, s.Get().SchemaVersion)
+
+	s2, err := LoadSettingsStore(p, defaultsForTest())
+	require.NoError(t, err)
+	require.Equal(t, SettingsSchemaVersion, s2.Get().SchemaVersion)
 }
 
 func TestSettingsStore_GetNotBlockedByPutIO(t *testing.T) {
