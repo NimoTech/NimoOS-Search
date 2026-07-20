@@ -193,24 +193,21 @@ func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.Even
 }
 
 func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
-	base, err := readDiscoveryURL(cfg.PhotosDiscoveryPath, "")
-	if err != nil || base == "" {
-		// Photos not discovered at boot: aggregator/visual degrade (nil
-		// client) — a separate concern from a peer restarting mid-flight.
-		return nil, nil
-	}
-	// Once discovered, wrap in a BaseURLSource so a later Photos restart
-	// (new random port) is picked up via refresh + retry instead of
-	// stranding this client until Search itself restarts.
-	return service.NewPhotosClient(service.NewBaseURLSource(cfg.PhotosDiscoveryPath, ""), 5), nil
+	// Always wire the client over a BaseURLSource, same as Wiki/Parser: if
+	// Photos hasn't been discovered yet (file unreadable), Get() falls back
+	// to "" and calls degrade to per-request errors, but every subsequent
+	// call re-reads the file while it has never resolved — so a Photos
+	// instance starting AFTER Search self-heals instead of requiring a
+	// Search restart. A boot-time nil-gate here would strand that case.
+	src := service.NewBaseURLSource(cfg.PhotosDiscoveryPath, "")
+	return service.NewPhotosClient(src, 5), nil
 }
 
 func newNotesClient(cfg config.Config) (*service.NotesClient, error) {
-	base, err := readDiscoveryURL(cfg.ParserDiscoveryPath, "") // same discovery source as ParserClient
-	if err != nil || base == "" {
-		return nil, nil
-	}
-	return service.NewNotesClient(service.NewBaseURLSource(cfg.ParserDiscoveryPath, ""), 5), nil
+	// Same discovery source as ParserClient; see newPhotosClient for why the
+	// boot-time nil-gate is gone.
+	src := service.NewBaseURLSource(cfg.ParserDiscoveryPath, "")
+	return service.NewNotesClient(src, 5), nil
 }
 
 func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, n *service.NotesClient, st *service.SettingsStore) *service.Aggregator {

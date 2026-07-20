@@ -36,11 +36,24 @@ func TestWikiClientRetriesViaDiscoveryOnTransportError(t *testing.T) {
 
 	dir := t.TempDir()
 	f := filepath.Join(dir, "wiki.url")
-	// 先指向一个必然拒连的端口(占用后立刻关掉的地址),再热切到 live server
-	require.NoError(t, os.WriteFile(f, []byte("http://127.0.0.1:1"), 0644))
-	c := NewWikiClient(NewBaseURLSource(f, "http://127.0.0.1:1"), 2, time.Minute)
+	// 先指向一个必然拒连的端口(占用后立刻关掉的地址)
+	deadAddr := "http://127.0.0.1:1"
+	require.NoError(t, os.WriteFile(f, []byte(deadAddr), 0644))
+	c := NewWikiClient(NewBaseURLSource(f, deadAddr), 2, time.Minute)
 
+	// Precondition: dial the dead address and prime the BaseURLSource's
+	// cache with it (both the initial attempt and the Refresh()-retry
+	// re-read the same dead-address file, so this must fail). If this
+	// assertion ever passes, the retry path below is not being exercised
+	// and the test has gone vacuous again.
+	_, err := c.UserRoots(context.Background(), "u1")
+	require.Error(t, err, "request against the dead address must fail before the file is hot-swapped")
+
+	// Now hot-swap the discovery file to the live server — same as a peer
+	// restarting on a new random port. The client's cached base URL still
+	// points at the dead address, so the first attempt below must fail at
+	// transport level and only succeed via src.Refresh() + retry.
 	require.NoError(t, os.WriteFile(f, []byte(srv.URL), 0644))
-	_, err := c.UserRoots(context.Background(), "u1") // 实际方法签名以 wiki_client.go 为准
+	_, err = c.UserRoots(context.Background(), "u1")
 	require.NoError(t, err, "transport error must trigger discovery refresh + one retry")
 }
