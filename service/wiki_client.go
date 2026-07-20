@@ -11,7 +11,7 @@ import (
 )
 
 type WikiClient struct {
-	baseURL  string
+	src      *BaseURLSource
 	hc       *http.Client
 	cacheTTL time.Duration
 
@@ -24,9 +24,9 @@ type userRootsCacheEntry struct {
 	exp   time.Time
 }
 
-func NewWikiClient(baseURL string, timeoutSec int, cacheTTL time.Duration) *WikiClient {
+func NewWikiClient(src *BaseURLSource, timeoutSec int, cacheTTL time.Duration) *WikiClient {
 	return &WikiClient{
-		baseURL:  baseURL,
+		src:      src,
 		hc:       &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
 		cacheTTL: cacheTTL,
 		cache:    map[string]userRootsCacheEntry{},
@@ -45,9 +45,10 @@ func (c *WikiClient) UserRoots(ctx context.Context, userID string) ([]string, er
 
 	q := url.Values{}
 	q.Set("user_id", userID)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.baseURL+"/v1/wiki/_internal/user-roots?"+q.Encode(), nil)
-	resp, err := c.hc.Do(req)
+	resp, err := doWithRediscover(c.hc, c.src, func(base string) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet,
+			base+"/v1/wiki/_internal/user-roots?"+q.Encode(), nil)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("wiki user-roots: %w", err)
 	}

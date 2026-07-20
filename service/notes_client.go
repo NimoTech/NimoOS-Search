@@ -23,15 +23,15 @@ type NoteHit struct {
 // NotesClient queries knowledge notes through Parser, which owns the
 // embed step and the user_id hard-isolation filter (single point of truth).
 type NotesClient struct {
-	base string
+	src  *BaseURLSource
 	http *http.Client
 }
 
-func NewNotesClient(base string, timeoutSec int) *NotesClient {
+func NewNotesClient(src *BaseURLSource, timeoutSec int) *NotesClient {
 	if timeoutSec <= 0 {
 		timeoutSec = 5
 	}
-	return &NotesClient{base: base,
+	return &NotesClient{src: src,
 		http: &http.Client{Timeout: time.Duration(timeoutSec) * time.Second}}
 }
 
@@ -43,13 +43,15 @@ func (c *NotesClient) Query(ctx context.Context, query string, topK int, userID 
 		// archived notes are excluded from search by design (spec §8).
 		"statuses": []string{"draft", "curated"},
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.base+"/v1/parser/notes/query", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
+	resp, err := doWithRediscover(c.http, c.src, func(base string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			base+"/v1/parser/notes/query", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}

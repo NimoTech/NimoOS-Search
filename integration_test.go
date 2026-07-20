@@ -43,7 +43,7 @@ func TestE2E_TextSearchHappyPath(t *testing.T) {
 	defer q.Close()
 
 	cache := service.NewEmbedCache(100, time.Hour)
-	pc := service.NewParserClient(parser.URL, 5)
+	pc := service.NewParserClient(service.NewBaseURLSource("", parser.URL), 5)
 	search := &service.SearchService{
 		Parser: pc, Qdrant: q, Cache: cache,
 		ParserVersion: "parser/0.1.0", DefaultTopK: 5, RerankerCandidates: 40,

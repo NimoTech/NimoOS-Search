@@ -18,14 +18,14 @@ var (
 )
 
 type ParserClient struct {
-	baseURL string
-	hc      *http.Client
+	src *BaseURLSource
+	hc  *http.Client
 }
 
-func NewParserClient(baseURL string, timeoutSec int) *ParserClient {
+func NewParserClient(src *BaseURLSource, timeoutSec int) *ParserClient {
 	return &ParserClient{
-		baseURL: baseURL,
-		hc:      &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
+		src: src,
+		hc:  &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
 	}
 }
 
@@ -52,10 +52,15 @@ func (c *ParserClient) Embed(ctx context.Context, model, inputType, text, imageB
 		body["image_b64"] = imageB64
 	}
 	buf, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/v1/parser/embed", bytes.NewReader(buf))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.hc.Do(req)
+	resp, err := doWithRediscover(c.hc, c.src, func(base string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			base+"/v1/parser/embed", bytes.NewReader(buf))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEmbedderUnavailable, err)
 	}
@@ -102,10 +107,15 @@ func (c *ParserClient) Rerank(ctx context.Context, query string, candidates []Re
 		body["top_k"] = *topK
 	}
 	buf, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/v1/parser/rerank", bytes.NewReader(buf))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.hc.Do(req)
+	resp, err := doWithRediscover(c.hc, c.src, func(base string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			base+"/v1/parser/rerank", bytes.NewReader(buf))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRerankerUnavailable, err)
 	}
@@ -158,9 +168,10 @@ func (c *ParserClient) ExpandFiles(ctx context.Context, fileIDs []string) (*Expa
 		}
 		q += id
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.baseURL+"/v1/parser/_internal/files?file_ids="+q, nil)
-	resp, err := c.hc.Do(req)
+	resp, err := doWithRediscover(c.hc, c.src, func(base string) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet,
+			base+"/v1/parser/_internal/files?file_ids="+q, nil)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrParserUnavailable, err)
 	}

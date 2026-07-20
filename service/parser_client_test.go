@@ -28,7 +28,7 @@ func TestParserEmbed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewParserClient(srv.URL, 5)
+	c := NewParserClient(NewBaseURLSource("", srv.URL), 5)
 	out, err := c.Embed(context.Background(), "bge-m3", "text", "hello", "")
 	require.NoError(t, err)
 	require.Equal(t, []float32{0.1, 0.2, 0.3}, out.Dense)
@@ -46,7 +46,7 @@ func TestParserRerank(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewParserClient(srv.URL, 5)
+	c := NewParserClient(NewBaseURLSource("", srv.URL), 5)
 	out, err := c.Rerank(context.Background(), "q",
 		[]RerankCandidate{{ID: "a", Text: "alpha"}, {ID: "b", Text: "beta"}}, nil)
 	require.NoError(t, err)
@@ -60,7 +60,7 @@ func TestParserRerank_503ReturnsErrUnavailable(t *testing.T) {
 		w.WriteHeader(503)
 	}))
 	defer srv.Close()
-	c := NewParserClient(srv.URL, 5)
+	c := NewParserClient(NewBaseURLSource("", srv.URL), 5)
 	_, err := c.Rerank(context.Background(), "q",
 		[]RerankCandidate{{ID: "a", Text: "alpha"}}, nil)
 	require.ErrorIs(t, err, ErrRerankerUnavailable)
@@ -80,7 +80,7 @@ func TestParserExpandFiles(t *testing.T) {
 		}`))
 	}))
 	defer srv.Close()
-	c := NewParserClient(srv.URL, 5)
+	c := NewParserClient(NewBaseURLSource("", srv.URL), 5)
 	out, err := c.ExpandFiles(context.Background(), []string{"a", "b"})
 	require.NoError(t, err)
 	require.Len(t, out.Files, 1)

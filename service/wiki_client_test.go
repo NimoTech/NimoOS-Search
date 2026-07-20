@@ -20,7 +20,7 @@ func TestWikiUserRoots(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewWikiClient(srv.URL, 5, 60*time.Second)
+	c := NewWikiClient(NewBaseURLSource("", srv.URL), 5, 60*time.Second)
 	out, err := c.UserRoots(context.Background(), "u1")
 	require.NoError(t, err)
 	require.Equal(t, []string{"r1", "r2"}, out)
@@ -40,7 +40,7 @@ func TestWikiUserRoots_CacheExpiry(t *testing.T) {
 		w.Write([]byte(`{"root_ids":["r1"]}`))
 	}))
 	defer srv.Close()
-	c := NewWikiClient(srv.URL, 5, 10*time.Millisecond)
+	c := NewWikiClient(NewBaseURLSource("", srv.URL), 5, 10*time.Millisecond)
 	_, _ = c.UserRoots(context.Background(), "u1")
 	time.Sleep(20 * time.Millisecond)
 	_, _ = c.UserRoots(context.Background(), "u1")
