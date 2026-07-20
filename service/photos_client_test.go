@@ -21,7 +21,7 @@ func TestPhotosClient_SmartSearch_MapsAssets(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewPhotosClient(srv.URL, 5)
+	c := NewPhotosClient(NewBaseURLSource("", srv.URL), 5)
 	hits, err := c.SmartSearch(context.Background(), "beach", 7, "42")
 	require.NoError(t, err)
 	require.Len(t, hits, 1)
@@ -39,7 +39,7 @@ func TestPhotosClient_SmartSearch_ErrorPropagates(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	c := NewPhotosClient(srv.URL, 5)
+	c := NewPhotosClient(NewBaseURLSource("", srv.URL), 5)
 	_, err := c.SmartSearch(context.Background(), "x", 5, "")
 	require.Error(t, err)
 }

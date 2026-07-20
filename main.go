@@ -95,11 +95,8 @@ func main() {
 // ---- fx providers ----
 
 func newParserClient(cfg config.Config) (*service.ParserClient, error) {
-	base, err := readDiscoveryURL(cfg.ParserDiscoveryPath, "http://127.0.0.1:8283")
-	if err != nil {
-		return nil, err
-	}
-	return service.NewParserClient(base, cfg.ParserTimeoutSec), nil
+	src := service.NewBaseURLSource(cfg.ParserDiscoveryPath, "http://127.0.0.1:8283")
+	return service.NewParserClient(src, cfg.ParserTimeoutSec), nil
 }
 
 func newWikiClient(cfg config.Config) (*service.WikiClient, error) {
@@ -107,12 +104,12 @@ func newWikiClient(cfg config.Config) (*service.WikiClient, error) {
 	// user-roots must go direct to the Wiki service via its discovery file,
 	// same as ParserClient. Wiki binds a random port, so there is no useful
 	// static fallback; if the file is absent the client stays wired but every
-	// call fails, and routes degrade to 503 exactly as before.
-	base, err := readDiscoveryURL(cfg.WikiDiscoveryPath, "http://127.0.0.1")
-	if err != nil {
-		return nil, err
-	}
-	return service.NewWikiClient(base, cfg.WikiTimeoutSec,
+	// call fails, and routes degrade to 503 exactly as before. The client
+	// holds a BaseURLSource, so if Wiki restarts on a new port after having
+	// been discovered once, a transport error triggers a re-read + retry
+	// instead of stranding Search until its own restart.
+	src := service.NewBaseURLSource(cfg.WikiDiscoveryPath, "http://127.0.0.1")
+	return service.NewWikiClient(src, cfg.WikiTimeoutSec,
 		time.Duration(cfg.UserRootsCacheTTLSec)*time.Second), nil
 }
 
@@ -198,10 +195,14 @@ func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.Even
 func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
 	base, err := readDiscoveryURL(cfg.PhotosDiscoveryPath, "")
 	if err != nil || base == "" {
-		// Photos not discovered: aggregator/visual degrade (nil client).
+		// Photos not discovered at boot: aggregator/visual degrade (nil
+		// client) — a separate concern from a peer restarting mid-flight.
 		return nil, nil
 	}
-	return service.NewPhotosClient(base, 5), nil
+	// Once discovered, wrap in a BaseURLSource so a later Photos restart
+	// (new random port) is picked up via refresh + retry instead of
+	// stranding this client until Search itself restarts.
+	return service.NewPhotosClient(service.NewBaseURLSource(cfg.PhotosDiscoveryPath, ""), 5), nil
 }
 
 func newNotesClient(cfg config.Config) (*service.NotesClient, error) {
@@ -209,7 +210,7 @@ func newNotesClient(cfg config.Config) (*service.NotesClient, error) {
 	if err != nil || base == "" {
 		return nil, nil
 	}
-	return service.NewNotesClient(base, 5), nil
+	return service.NewNotesClient(service.NewBaseURLSource(cfg.ParserDiscoveryPath, ""), 5), nil
 }
 
 func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, n *service.NotesClient, st *service.SettingsStore) *service.Aggregator {
