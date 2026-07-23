@@ -20,8 +20,8 @@ func TestGetChunk_HappyPath(t *testing.T) {
 		{Payload: map[string]any{"kind": "body", "chunk_no": int64(9), "text": "nine"}},
 	}}
 	deps := &Deps{
-		Authz: &service.AuthzService{Qdrant: q},
-		Wiki:  &stubWiki{roots: []string{"r1"}},
+		Authz:  &service.AuthzService{Qdrant: q},
+		NimoOS: &stubNimoOS{roots: []string{"r1"}},
 	}
 	e := echo.New()
 	e.Use(InjectUserID)
@@ -41,8 +41,8 @@ func TestGetChunk_HappyPath(t *testing.T) {
 
 func TestGetChunk_404OnNoScope(t *testing.T) {
 	deps := &Deps{
-		Authz: &service.AuthzService{Qdrant: &emptyQdrant{}},
-		Wiki:  &stubWiki{roots: []string{"r1"}},
+		Authz:  &service.AuthzService{Qdrant: &emptyQdrant{}},
+		NimoOS: &stubNimoOS{roots: []string{"r1"}},
 	}
 	e := echo.New()
 	e.Use(InjectUserID)

@@ -14,8 +14,8 @@ import (
 func TestGetFile_404WhenNotInScope(t *testing.T) {
 	q := &emptyQdrant{}
 	deps := &Deps{
-		Authz: &service.AuthzService{Qdrant: q},
-		Wiki:  &stubWiki{roots: []string{"r1"}},
+		Authz:  &service.AuthzService{Qdrant: q},
+		NimoOS: &stubNimoOS{roots: []string{"r1"}},
 	}
 	e := echo.New()
 	e.Use(InjectUserID)
@@ -38,8 +38,8 @@ func TestGetFile_HappyPath(t *testing.T) {
 	}}
 	_ = q
 	deps := &Deps{
-		Authz: &service.AuthzService{Qdrant: q2},
-		Wiki:  &stubWiki{roots: []string{"r1"}},
+		Authz:  &service.AuthzService{Qdrant: q2},
+		NimoOS: &stubNimoOS{roots: []string{"r1"}},
 	}
 	e := echo.New()
 	e.Use(InjectUserID)

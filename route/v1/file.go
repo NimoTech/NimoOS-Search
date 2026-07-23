@@ -28,7 +28,7 @@ func getSearchFile(d *Deps) echo.HandlerFunc {
 			limit = 200
 		}
 		uid, _ := c.Get(CtxUserIDKey).(string)
-		allowed, err := d.Wiki.UserRoots(c.Request().Context(), uid)
+		allowed, err := d.NimoOS.SearchRoots(c.Request().Context(), uid)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
 		}

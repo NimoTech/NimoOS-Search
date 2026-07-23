@@ -12,9 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The gateway refuses every /_internal/ path (NimoOS-Gateway e2c9b9c), so
-// user-roots must go direct to the Wiki service via its discovery file.
-func TestNewWikiClientReadsDiscoveryFile(t *testing.T) {
+// 授权源已从 Wiki 切到核心(NimoOS 主服务,见 Task 8)。Gateway 拒绝所有
+// /_internal/ 路径(NimoOS-Gateway e2c9b9c),所以 root 授权查询依旧要经由
+// discovery 文件直连核心。
+func TestNewNimoOSClientReadsDiscoveryFile(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -22,15 +23,15 @@ func TestNewWikiClientReadsDiscoveryFile(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := filepath.Join(t.TempDir(), "wiki.url")
+	p := filepath.Join(t.TempDir(), "nimoos.url")
 	require.NoError(t, os.WriteFile(p, []byte(srv.URL+"\n"), 0o644))
 
-	cfg := config.Config{WikiDiscoveryPath: p, WikiTimeoutSec: 5, UserRootsCacheTTLSec: 60}
-	wc, err := newWikiClient(cfg)
+	cfg := config.Config{NimoOSDiscoveryPath: p, UserRootsCacheTTLSec: 60}
+	nc, err := newNimoOSClient(cfg)
 	require.NoError(t, err)
 
-	roots, err := wc.UserRoots(context.Background(), "1")
+	roots, err := nc.SearchRoots(context.Background(), "1")
 	require.NoError(t, err)
 	require.Equal(t, []string{"r1"}, roots)
-	require.Equal(t, "/v1/wiki/_internal/user-roots", gotPath)
+	require.Equal(t, "/v1/nimoos/search-roots", gotPath)
 }

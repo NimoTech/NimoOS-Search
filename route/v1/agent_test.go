@@ -27,8 +27,8 @@ func TestGetAgentTools(t *testing.T) {
 
 func TestPostAgentTool_UnknownReturns400(t *testing.T) {
 	deps := &Deps{
-		Tools: &service.AgentTools{},
-		Wiki:  &stubWiki{roots: []string{"r1"}},
+		Tools:  &service.AgentTools{},
+		NimoOS: &stubNimoOS{roots: []string{"r1"}},
 	}
 	e := echo.New()
 	e.Use(InjectUserID)
@@ -54,8 +54,8 @@ func TestGetAgentFiltersSchema(t *testing.T) {
 
 func TestPostAgentTool_MissingUserIDReturns400(t *testing.T) {
 	deps := &Deps{
-		Tools: &service.AgentTools{},
-		Wiki:  &stubWiki{roots: []string{"r1"}},
+		Tools:  &service.AgentTools{},
+		NimoOS: &stubNimoOS{roots: []string{"r1"}},
 	}
 	e := echo.New()
 	e.Use(InjectUserID)
@@ -80,8 +80,8 @@ func TestPostAgentTool_EmptyRootsReturns200(t *testing.T) {
 	require.NoError(t, err)
 	deps := &Deps{
 		// Agg with nil Search: Aggregator skips semantic source, returns empty groups, 200 OK.
-		Tools: &service.AgentTools{Agg: &service.Aggregator{Settings: st}, Authz: nil},
-		Wiki:  &stubWiki{roots: nil}, // user known, but no accessible roots
+		Tools:  &service.AgentTools{Agg: &service.Aggregator{Settings: st}, Authz: nil},
+		NimoOS: &stubNimoOS{roots: nil}, // user known, but no accessible roots
 	}
 	e := echo.New()
 	e.Use(InjectUserID)

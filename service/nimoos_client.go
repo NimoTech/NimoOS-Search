@@ -69,10 +69,3 @@ func (c *NimoOSClient) SearchRoots(ctx context.Context, userID string) ([]string
 	c.mu.Unlock()
 	return out.RootIDs, nil
 }
-
-// InvalidateCache 清除指定 userID 的缓存(供 /_internal/warm 或测试使用)。
-func (c *NimoOSClient) InvalidateCache(userID string) {
-	c.mu.Lock()
-	delete(c.cache, userID)
-	c.mu.Unlock()
-}

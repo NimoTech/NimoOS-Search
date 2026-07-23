@@ -56,7 +56,7 @@ func main() {
 		fx.Supply(cfg),
 		fx.Provide(
 			newParserClient,
-			newWikiClient,
+			newNimoOSClient,
 			newQdrantClient,
 			newCache,
 			newSearchService,
@@ -99,17 +99,15 @@ func newParserClient(cfg config.Config) (*service.ParserClient, error) {
 	return service.NewParserClient(src, cfg.ParserTimeoutSec), nil
 }
 
-func newWikiClient(cfg config.Config) (*service.WikiClient, error) {
-	// The Gateway refuses every /_internal/ path (NimoOS-Gateway e2c9b9c), so
-	// user-roots must go direct to the Wiki service via its discovery file,
-	// same as ParserClient. Wiki binds a random port, so there is no useful
-	// static fallback; if the file is absent the client stays wired but every
-	// call fails, and routes degrade to 503 exactly as before. The client
-	// holds a BaseURLSource, so if Wiki restarts on a new port after having
-	// been discovered once, a transport error triggers a re-read + retry
-	// instead of stranding Search until its own restart.
-	src := service.NewBaseURLSource(cfg.WikiDiscoveryPath, "http://127.0.0.1")
-	return service.NewWikiClient(src, cfg.WikiTimeoutSec,
+func newNimoOSClient(cfg config.Config) (*service.NimoOSClient, error) {
+	// 授权源已从 Wiki 切到核心(NimoOS 主服务,见 Task 8)。Gateway 会拒绝所有
+	// /_internal/ 路径(NimoOS-Gateway e2c9b9c),所以 root 授权查询依旧要经由
+	// discovery 文件直连,与 ParserClient 同理:文件缺失时 client 仍会被装配,
+	// 只是每次调用都失败,路由照旧降级为 503。client 内部持有 BaseURLSource,
+	// 一旦核心重启换端口,传输层错误会触发重新读取 discovery 文件 + 重试,
+	// 不必等 Search 自己重启才能自愈。
+	src := service.NewBaseURLSource(cfg.NimoOSDiscoveryPath, "http://127.0.0.1")
+	return service.NewNimoOSClient(src,
 		time.Duration(cfg.UserRootsCacheTTLSec)*time.Second), nil
 }
 
@@ -193,7 +191,7 @@ func newFileIndex(cfg config.Config, st *service.SettingsStore, eb *service.Even
 }
 
 func newPhotosClient(cfg config.Config) (*service.PhotosClient, error) {
-	// Always wire the client over a BaseURLSource, same as Wiki/Parser: if
+	// Always wire the client over a BaseURLSource, same as NimoOS/Parser: if
 	// Photos hasn't been discovered yet (file unreadable), Get() falls back
 	// to "" and calls degrade to per-request errors, but every subsequent
 	// call re-reads the file while it has never resolved — so a Photos
@@ -260,9 +258,9 @@ func newEventBus(cfg config.Config, lc fx.Lifecycle) *service.EventBus {
 }
 
 func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzService,
-	w *service.WikiClient, t *service.AgentTools, p *service.PhotosClient,
+	n *service.NimoOSClient, t *service.AgentTools, p *service.PhotosClient,
 	sub *fileindex.Subsystem, st *service.SettingsStore) {
-	deps := &v1.Deps{Search: s, Authz: a, Wiki: w, Tools: t, Settings: st, FileIndex: sub}
+	deps := &v1.Deps{Search: s, Authz: a, NimoOS: n, Tools: t, Settings: st, FileIndex: sub}
 	if p != nil {
 		deps.Photos = p
 	}

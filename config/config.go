@@ -17,12 +17,10 @@ type Config struct {
 	EmbedCacheTTLSec     int
 	UserRootsCacheTTLSec int
 	ParserTimeoutSec     int
-	WikiTimeoutSec       int
 	QdrantURL            string
 	QdrantGRPCPort       int
 
 	ParserDiscoveryPath  string
-	WikiDiscoveryPath    string
 	NimoOSDiscoveryPath  string
 	GatewayDiscoveryPath string
 	MessageBusSocket     string
@@ -57,28 +55,26 @@ type Config struct {
 
 func defaults() Config {
 	return Config{
-		BindHost:                       "127.0.0.1",
-		RerankerEnabled:                true,
-		RerankerCandidates:             40,
-		DefaultTopK:                    20,
-		MaxTopK:                        100,
-		EmbedCacheSize:                 1000,
-		EmbedCacheTTLSec:               300,
-		UserRootsCacheTTLSec:           60,
-		ParserTimeoutSec:               10,
-		WikiTimeoutSec:                 5,
-		QdrantURL:                      "http://127.0.0.1:6333",
-		QdrantGRPCPort:                 6334,
-		ParserDiscoveryPath:            "/var/run/nimoos/parser.url",
-		WikiDiscoveryPath:              "/var/run/nimoos/wiki.url",
-		NimoOSDiscoveryPath:            "/var/run/nimoos/nimoos.url",
-		GatewayDiscoveryPath:           "/var/run/nimoos/management.url",
-		MessageBusSocket:               "/var/run/nimoos/message-bus.sock",
-		RuntimePath:                    "/var/run/nimoos",
-		DataPath:                       "/var/lib/nimoos/search",
-		LogPath:                        "/var/log/nimoos",
-		FileIndexEnabled:               true,
-		FileIndexRoots:                 []string{"/DATA", "/mnt", "/media"},
+		BindHost:             "127.0.0.1",
+		RerankerEnabled:      true,
+		RerankerCandidates:   40,
+		DefaultTopK:          20,
+		MaxTopK:              100,
+		EmbedCacheSize:       1000,
+		EmbedCacheTTLSec:     300,
+		UserRootsCacheTTLSec: 60,
+		ParserTimeoutSec:     10,
+		QdrantURL:            "http://127.0.0.1:6333",
+		QdrantGRPCPort:       6334,
+		ParserDiscoveryPath:  "/var/run/nimoos/parser.url",
+		NimoOSDiscoveryPath:  "/var/run/nimoos/nimoos.url",
+		GatewayDiscoveryPath: "/var/run/nimoos/management.url",
+		MessageBusSocket:     "/var/run/nimoos/message-bus.sock",
+		RuntimePath:          "/var/run/nimoos",
+		DataPath:             "/var/lib/nimoos/search",
+		LogPath:              "/var/log/nimoos",
+		FileIndexEnabled:     true,
+		FileIndexRoots:       []string{"/DATA", "/mnt", "/media"},
 		// NimoOS overlay-root system mounts that live under /mnt and /media.
 		// They expose the whole OS root filesystem and system partitions; left in,
 		// the boot scan indexes hundreds of thousands of system files and pegs a
@@ -91,13 +87,13 @@ func defaults() Config {
 		// doesn't pin a CPU core. Every 1000 entries visited, sleep 50ms.
 		FileIndexWalkThrottleEvery:   1000,
 		FileIndexWalkThrottleSleepMs: 50,
-		PhotosDiscoveryPath:            "/var/run/nimoos/photos.url",
-		AggSemanticTopK:                5,
-		AggFilenameTopK:                5,
-		AggImageTopK:                   5,
-		AggNotesTopK:                   5,
-		AggMaxTotalResults:             15,
-		SettingsPath:                   "/var/lib/nimoos/search-settings.json",
+		PhotosDiscoveryPath:          "/var/run/nimoos/photos.url",
+		AggSemanticTopK:              5,
+		AggFilenameTopK:              5,
+		AggImageTopK:                 5,
+		AggNotesTopK:                 5,
+		AggMaxTotalResults:           15,
+		SettingsPath:                 "/var/lib/nimoos/search-settings.json",
 	}
 }
 
@@ -145,9 +141,6 @@ func applyINI(f *ini.File, c *Config) {
 		if k, _ := s.GetKey("ParserTimeoutSec"); k != nil {
 			c.ParserTimeoutSec, _ = k.Int()
 		}
-		if k, _ := s.GetKey("WikiTimeoutSec"); k != nil {
-			c.WikiTimeoutSec, _ = k.Int()
-		}
 		if k, _ := s.GetKey("QdrantUrl"); k != nil {
 			c.QdrantURL = k.String()
 		}
@@ -158,9 +151,6 @@ func applyINI(f *ini.File, c *Config) {
 	if s := f.Section("upstream"); s != nil {
 		if k, _ := s.GetKey("ParserDiscoveryPath"); k != nil {
 			c.ParserDiscoveryPath = k.String()
-		}
-		if k, _ := s.GetKey("WikiDiscoveryPath"); k != nil {
-			c.WikiDiscoveryPath = k.String()
 		}
 		if k, _ := s.GetKey("NimoOSDiscoveryPath"); k != nil {
 			c.NimoOSDiscoveryPath = k.String()
@@ -262,9 +252,6 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("SEARCH_PARSER_DISCOVERY_PATH"); v != "" {
 		c.ParserDiscoveryPath = v
-	}
-	if v := os.Getenv("SEARCH_WIKI_DISCOVERY_PATH"); v != "" {
-		c.WikiDiscoveryPath = v
 	}
 	if v := os.Getenv("SEARCH_NIMOOS_DISCOVERY_PATH"); v != "" {
 		c.NimoOSDiscoveryPath = v

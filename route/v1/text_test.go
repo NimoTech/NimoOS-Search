@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type stubWiki struct{ roots []string }
+type stubNimoOS struct{ roots []string }
 
-func (s *stubWiki) UserRoots(ctx context.Context, uid string) ([]string, error) {
+func (s *stubNimoOS) SearchRoots(ctx context.Context, uid string) ([]string, error) {
 	return s.roots, nil
 }
 
@@ -27,10 +27,10 @@ func TestPostSearchText_HappyPath(t *testing.T) {
 				"file_id": "f1", "kind": "body", "chunk_no": int64(0), "text": "hello",
 			}},
 		}},
-		Cache: service.NewEmbedCache(10, 0),
+		Cache:       service.NewEmbedCache(10, 0),
 		DefaultTopK: 5, RerankerCandidates: 40, ParserVersion: "v",
 	}
-	deps := &Deps{Search: search, Wiki: &stubWiki{roots: []string{"r1"}}}
+	deps := &Deps{Search: search, NimoOS: &stubNimoOS{roots: []string{"r1"}}}
 
 	e := echo.New()
 	e.Use(InjectUserID)
@@ -55,7 +55,7 @@ func TestPostSearchText_NoAccessibleRoots(t *testing.T) {
 		Parser: &fakeParserSvc{}, Qdrant: &fakeQdrantSvc{},
 		Cache: service.NewEmbedCache(10, 0), DefaultTopK: 5, RerankerCandidates: 40,
 	}
-	deps := &Deps{Search: search, Wiki: &stubWiki{roots: []string{}}}
+	deps := &Deps{Search: search, NimoOS: &stubNimoOS{roots: []string{}}}
 	e := echo.New()
 	e.Use(InjectUserID)
 	RegisterText(e, deps)
@@ -72,6 +72,41 @@ func TestPostSearchText_NoAccessibleRoots(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Empty(t, resp.Hits)
 	require.Contains(t, resp.Warnings, "no_accessible_roots")
+}
+
+// TestPostSearchText_PhotosRootPassesScope 断言:allowed 集含核心 seed root
+// "photos" 时(请求不显式指定 root_ids),ApplyScope 不会把它过滤掉——
+// 即 text_chunks 里 root_ids=["photos"] 的 caption 能被语义检索命中。
+// 这是"授权源解耦"项目的最终验收点(见 task-8-brief.md)。
+func TestPostSearchText_PhotosRootPassesScope(t *testing.T) {
+	q := &capturingQdrantSvc{hits: []service.QdrantHit{
+		{PointID: "p1", Score: 0.9, Payload: map[string]any{
+			"file_id": "photos", "kind": "caption", "chunk_no": int64(0), "text": "a cat on a windowsill",
+		}},
+	}}
+	search := &service.SearchService{
+		Parser: &fakeParserSvc{}, Qdrant: q,
+		Cache: service.NewEmbedCache(10, 0), DefaultTopK: 5, RerankerCandidates: 40, ParserVersion: "v",
+	}
+	deps := &Deps{Search: search, NimoOS: &stubNimoOS{roots: []string{"photos"}}}
+
+	e := echo.New()
+	e.Use(InjectUserID)
+	RegisterText(e, deps)
+
+	body, _ := json.Marshal(map[string]any{"query": "cat"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/search/text", bytes.NewReader(body))
+	req.Header.Set("X-NimoOS-User-ID", "u1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, q.gotRootIDs, "photos", "ApplyScope 应把 photos 放进传给 Qdrant 的 root 过滤")
+	var resp service.SearchResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Hits, 1)
+	require.NotContains(t, resp.Warnings, "no_accessible_roots")
 }
 
 // Minimal stubs reusing service package types (in service_test.go these are
@@ -97,3 +132,21 @@ func (f *fakeQdrantSvc) ScrollByFileID(ctx context.Context, c, fid string, roots
 	return nil, "", nil
 }
 func (f *fakeQdrantSvc) Count(ctx context.Context, c string) (uint64, error) { return 0, nil }
+
+// capturingQdrantSvc 记录传入的 root 过滤条件,用于断言 ApplyScope 的结果确实
+// 被送到了 Qdrant 查询里(而不仅仅是 Filters 结构体本身)。
+type capturingQdrantSvc struct {
+	hits       []service.QdrantHit
+	gotRootIDs []string
+}
+
+func (f *capturingQdrantSvc) SearchTextHybrid(ctx context.Context, r service.QdrantSearchRequest) ([]service.QdrantHit, error) {
+	if r.Filter != nil {
+		f.gotRootIDs = r.Filter.RootIDsAny
+	}
+	return f.hits, nil
+}
+func (f *capturingQdrantSvc) ScrollByFileID(ctx context.Context, c, fid string, roots []string, l int, off string) ([]service.QdrantHit, string, error) {
+	return nil, "", nil
+}
+func (f *capturingQdrantSvc) Count(ctx context.Context, c string) (uint64, error) { return 0, nil }
