@@ -23,6 +23,7 @@ type Config struct {
 
 	ParserDiscoveryPath  string
 	WikiDiscoveryPath    string
+	NimoOSDiscoveryPath  string
 	GatewayDiscoveryPath string
 	MessageBusSocket     string
 
@@ -70,6 +71,7 @@ func defaults() Config {
 		QdrantGRPCPort:                 6334,
 		ParserDiscoveryPath:            "/var/run/nimoos/parser.url",
 		WikiDiscoveryPath:              "/var/run/nimoos/wiki.url",
+		NimoOSDiscoveryPath:            "/var/run/nimoos/nimoos.url",
 		GatewayDiscoveryPath:           "/var/run/nimoos/management.url",
 		MessageBusSocket:               "/var/run/nimoos/message-bus.sock",
 		RuntimePath:                    "/var/run/nimoos",
@@ -159,6 +161,9 @@ func applyINI(f *ini.File, c *Config) {
 		}
 		if k, _ := s.GetKey("WikiDiscoveryPath"); k != nil {
 			c.WikiDiscoveryPath = k.String()
+		}
+		if k, _ := s.GetKey("NimoOSDiscoveryPath"); k != nil {
+			c.NimoOSDiscoveryPath = k.String()
 		}
 		if k, _ := s.GetKey("GatewayDiscoveryPath"); k != nil {
 			c.GatewayDiscoveryPath = k.String()
@@ -260,6 +265,9 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("SEARCH_WIKI_DISCOVERY_PATH"); v != "" {
 		c.WikiDiscoveryPath = v
+	}
+	if v := os.Getenv("SEARCH_NIMOOS_DISCOVERY_PATH"); v != "" {
+		c.NimoOSDiscoveryPath = v
 	}
 	if v := os.Getenv("SEARCH_GATEWAY_DISCOVERY_PATH"); v != "" {
 		c.GatewayDiscoveryPath = v
