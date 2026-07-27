@@ -177,6 +177,43 @@ func hitToFileChunk(h QdrantHit) FileChunk {
 	return fc
 }
 
+// PhotoCaption 点查单张照片(assetID)的 caption 文本,满足 CaptionSource
+// 接口。file_id 惯例是 "photos:<asset_id>"(见 NimoOS-Parser 写入约定),
+// 复用 ScrollByFileID 的 root_ids 授权交集(与 GetFileChunks 等同一套语义)。
+// 5 条足够——一张照片正常只有一条 kind=="caption" 的 chunk,给一点余量以防
+// 未来分段。无命中(没生成过 caption、或不在 allowedRoots 内)返回
+// ("", nil),不是错误:调用方(aggregate images 分支)按 fail-open 处理,
+// 这里不需要额外语义区分"没有"和"查询失败之外的失败"。
+func (s *AuthzService) PhotoCaption(ctx context.Context, assetID string, allowedRoots []string) (string, error) {
+	if len(allowedRoots) == 0 {
+		return "", nil
+	}
+	hits, _, err := s.Qdrant.ScrollByFileID(ctx, collectionTextChunks, "photos:"+assetID, allowedRoots, 5, "")
+	if err != nil {
+		return "", err
+	}
+	for _, h := range hits {
+		kind, _ := h.Payload["kind"].(string)
+		if kind != "caption" {
+			continue
+		}
+		text, _ := h.Payload["text"].(string)
+		return truncateRunes(text, 200), nil
+	}
+	return "", nil
+}
+
+// truncateRunes 按 rune(而非 byte)截断 s 到最多 max 个 rune,超长时在末尾
+// 加省略号 "…"。rune 截断是因为 caption 常含多字节字符(中文/emoji),按
+// byte 切会切碎字符产生乱码。
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
+}
+
 type DocumentTextResponse struct {
 	FileID     string `json:"file_id"`
 	Text       string `json:"text"`

@@ -183,3 +183,67 @@ func TestAggregate_NotesFailureDegrades(t *testing.T) {
 	require.Contains(t, resp.Warnings, "notes_unavailable")
 	require.Empty(t, resp.Groups.Notes)
 }
+
+// fakeCaptions 实现 CaptionSource:按 assetID 查表返回 caption,或统一返回 err
+// (用来模拟 Qdrant 点查失败,验证 fail-open)。
+type fakeCaptions struct {
+	m   map[string]string
+	err error
+}
+
+func (f *fakeCaptions) PhotoCaption(_ context.Context, id string, _ []string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.m[id], nil
+}
+
+func TestAggregate_ImagesCarryCaption(t *testing.T) {
+	agg := newAggForTest(nil, fakeImageSearcher{hits: []ImageHit{
+		{AssetID: "a1", Name: "dam.jpg"},
+		{AssetID: "a2", Name: "cat.jpg"},
+	}})
+	agg.Captions = &fakeCaptions{m: map[string]string{"a1": "A large dam across a river valley"}}
+
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+
+	require.Len(t, resp.Groups.Images, 2)
+	byID := map[string]ImageHit{}
+	for _, h := range resp.Groups.Images {
+		byID[h.AssetID] = h
+	}
+	require.Equal(t, "A large dam across a river valley", byID["a1"].Caption)
+	require.Empty(t, byID["a2"].Caption, "无 caption 命中不应报错,留空即可")
+}
+
+func TestAggregate_ImagesCaptionFailOpen(t *testing.T) {
+	agg := newAggForTest(nil, fakeImageSearcher{hits: []ImageHit{
+		{AssetID: "a1", Name: "dam.jpg"},
+		{AssetID: "a2", Name: "cat.jpg"},
+	}})
+	agg.Captions = &fakeCaptions{err: errors.New("qdrant down")}
+
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+
+	require.Len(t, resp.Groups.Images, 2, "fail-open: caption 查询失败不影响命中数")
+	for _, h := range resp.Groups.Images {
+		require.Empty(t, h.Caption)
+	}
+	for _, w := range resp.Warnings {
+		require.NotContains(t, w, "caption", "fail-open: 不应新增 caption 相关 warning")
+	}
+}
+
+func TestAggregate_ImagesCaptionTruncated(t *testing.T) {
+	long := strings.Repeat("测", 150) + strings.Repeat("a", 150) // 300 runes,含多字节字符
+	agg := newAggForTest(nil, fakeImageSearcher{hits: []ImageHit{{AssetID: "a1", Name: "dam.jpg"}}})
+	agg.Captions = &fakeCaptions{m: map[string]string{"a1": long}}
+
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+
+	require.Len(t, resp.Groups.Images, 1)
+	caption := resp.Groups.Images[0].Caption
+	runes := []rune(caption)
+	require.LessOrEqual(t, len(runes), 201)
+	require.True(t, strings.HasSuffix(caption, "…"))
+}
