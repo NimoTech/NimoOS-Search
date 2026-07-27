@@ -34,8 +34,8 @@ func TestE2E_TextSearchHappyPath(t *testing.T) {
 	}))
 	defer parser.Close()
 
-	// 2. Fake Wiki via WikiResolver stub (we won't bother with full Gateway here)
-	wiki := stubWikiE2E{roots: []string{"r1"}}
+	// 2. Fake NimoOS core via RootAuthorizer stub (we won't bother with full Gateway here)
+	nimoos := stubNimoOSE2E{roots: []string{"r1"}}
 
 	// 3. Real Qdrant — Search service against real cluster
 	q, err := service.NewQdrantClient("127.0.0.1", 6334)
@@ -55,7 +55,7 @@ func TestE2E_TextSearchHappyPath(t *testing.T) {
 	// 4. Wire Echo
 	e := echo.New()
 	e.Use(v1.InjectUserID)
-	deps := &v1.Deps{Search: search, Authz: authz, Wiki: &wiki, Tools: tools}
+	deps := &v1.Deps{Search: search, Authz: authz, NimoOS: &nimoos, Tools: tools}
 	v1.RegisterText(e, deps)
 
 	// 5. POST /v1/search/text
@@ -76,8 +76,8 @@ func TestE2E_TextSearchHappyPath(t *testing.T) {
 	require.Empty(t, resp.Warnings)
 }
 
-type stubWikiE2E struct{ roots []string }
+type stubNimoOSE2E struct{ roots []string }
 
-func (s *stubWikiE2E) UserRoots(ctx context.Context, uid string) ([]string, error) {
+func (s *stubNimoOSE2E) SearchRoots(ctx context.Context, uid string) ([]string, error) {
 	return s.roots, nil
 }

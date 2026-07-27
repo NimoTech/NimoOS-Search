@@ -11,14 +11,15 @@ import (
 type Deps struct {
 	Search    *service.SearchService
 	Authz     *service.AuthzService
-	Wiki      WikiResolver
+	NimoOS    RootAuthorizer
 	Tools     *service.AgentTools
 	Photos    service.ImageSearcher
 	Settings  *service.SettingsStore
 	FileIndex *fileindex.Subsystem
 }
 
-// WikiResolver narrows what routes need from WikiClient (testability).
-type WikiResolver interface {
-	UserRoots(ctx context.Context, userID string) ([]string, error)
+// RootAuthorizer narrows what routes need from NimoOSClient (testability).
+// 授权源已从 Wiki 切到核心(NimoOS 主服务),见 Task 8。
+type RootAuthorizer interface {
+	SearchRoots(ctx context.Context, userID string) ([]string, error)
 }

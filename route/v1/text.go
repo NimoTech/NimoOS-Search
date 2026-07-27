@@ -31,7 +31,7 @@ func postSearchText(d *Deps) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusBadRequest, "query is required")
 		}
 		uid, _ := c.Get(CtxUserIDKey).(string)
-		allowed, err := d.Wiki.UserRoots(c.Request().Context(), uid)
+		allowed, err := d.NimoOS.SearchRoots(c.Request().Context(), uid)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable,
 				"unable to determine user roots: "+err.Error())

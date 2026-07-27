@@ -64,7 +64,7 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 
 func (a *AgentTools) FiltersSchema() map[string]any {
 	return map[string]any{
-		"root_ids":       map[string]any{"type": "string[]", "description": "Restrict to specific Wiki Roots. Intersected with user's allowed roots."},
+		"root_ids":       map[string]any{"type": "string[]", "description": "Restrict to specific Roots. Intersected with user's allowed roots."},
 		"mime_prefix":    map[string]any{"type": "string[]", "description": "Match by MIME prefix, e.g. ['text/markdown']."},
 		"kind_in":        map[string]any{"type": "string[]", "description": "Chunk kind: body, ocr, caption, transcript, summary. MVP only has 'body'."},
 		"lang_in":        map[string]any{"type": "string[]", "description": "ISO lang codes, e.g. ['zh','en']."},
@@ -78,8 +78,8 @@ const (
 )
 
 // Invoke dispatches an agent tool by name. allowedRoots is the result of
-// WikiClient.UserRoots(ctx, user_id) — route handler injects it so the tool
-// invocation itself can't escape root scope.
+// NimoOSClient.SearchRoots(ctx, user_id) — route handler injects it so the
+// tool invocation itself can't escape root scope.
 func (a *AgentTools) Invoke(ctx context.Context, name string,
 	args map[string]any, allowedRoots []string) (any, error) {
 	switch name {

@@ -13,15 +13,14 @@ EmbedCacheSize        = 1000
 EmbedCacheTtlSec      = 300
 UserRootsCacheTtlSec  = 60
 ParserTimeoutSec      = 10
-WikiTimeoutSec        = 5
 QdrantUrl             = http://127.0.0.1:6333
 QdrantGrpcPort        = 6334
 
 [upstream]
-ParserDiscoveryPath  = /var/run/nimoos/parser.url
-WikiDiscoveryPath    = /var/run/nimoos/wiki.url
-GatewayDiscoveryPath = /var/run/nimoos/management.url
-MessageBusSocket     = /var/run/nimoos/message-bus.sock
+ParserDiscoveryPath      = /var/run/nimoos/parser.url
+NimoOSDiscoveryPath      = /var/run/nimoos/nimoos.url
+GatewayDiscoveryPath     = /var/run/nimoos/management.url
+MessageBusSocket         = /var/run/nimoos/message-bus.sock
 
 [fileindex]
 Enabled               = true

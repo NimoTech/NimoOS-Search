@@ -48,9 +48,9 @@ func postAgentTool(d *Deps) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusBadRequest, "X-NimoOS-User-ID required")
 		}
 		var allowedRoots []string
-		if d.Wiki != nil {
+		if d.NimoOS != nil {
 			var err error
-			allowedRoots, err = d.Wiki.UserRoots(c.Request().Context(), uid)
+			allowedRoots, err = d.NimoOS.SearchRoots(c.Request().Context(), uid)
 			if err != nil {
 				return echo.NewHTTPError(http.StatusServiceUnavailable,
 					"unable to determine user roots: "+err.Error())
