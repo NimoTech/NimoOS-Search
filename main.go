@@ -208,7 +208,7 @@ func newNotesClient(cfg config.Config) (*service.NotesClient, error) {
 	return service.NewNotesClient(src, 5), nil
 }
 
-func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, n *service.NotesClient, st *service.SettingsStore) *service.Aggregator {
+func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *service.PhotosClient, n *service.NotesClient, st *service.SettingsStore, az *service.AuthzService) *service.Aggregator {
 	agg := &service.Aggregator{Search: s, Settings: st}
 	// Assign through interfaces only when non-nil, so a nil *T doesn't become a
 	// non-nil interface (Go typed-nil trap) that breaks the `== nil` checks.
@@ -220,6 +220,11 @@ func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *servic
 	}
 	if n != nil {
 		agg.Notes = n
+	}
+	if az != nil {
+		// AuthzService 已经持有 Qdrant 并实现了 PhotoCaption(见 authz.go),
+		// 直接复用即可,不需要再造一个专门的 caption 客户端。
+		agg.Captions = az
 	}
 	return agg
 }
