@@ -16,7 +16,7 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 	return map[string]any{"tools": []any{
 		map[string]any{
 			"name":        "nimoos_search",
-			"description": "Unified search over the user's NAS: by content (semantic), by filename, photos, and knowledge notes — returns grouped candidates for the user to pick from. Narrow with `sources`, e.g. [\"images\"] for photos only.",
+			"description": "Unified search over the user's NAS: by content (semantic), by filename, photos, and knowledge notes — returns grouped candidates for the user to pick from. Photos match two ways: visual similarity (images source) AND text descriptions of photo content (semantic source, kind=caption — e.g. words on a cake, formulas on a whiteboard). For photo queries omit `sources` or pass [\"semantic\",\"images\"]; do not restrict to [\"images\"] alone. Image hits include a `caption` field you can cite as relevance evidence.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -24,7 +24,7 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 					"sources": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "enum": []string{"semantic", "filenames", "images", "notes"}},
-						"description": "Which sources to search; omit for all four. Pass [\"images\"] to search photos only.",
+						"description": "Which sources to search; omit for all four. For photos, prefer omitting or [\"semantic\",\"images\"] — photo content descriptions (captions) live in the semantic source.",
 					},
 					"filters": map[string]any{"type": "object", "description": "Applies to the semantic source only."},
 					"top_k":   map[string]any{"type": "integer", "default": 5, "minimum": 1, "maximum": 20, "description": "Per-source cap."},
