@@ -284,7 +284,7 @@ go test ./...
 go generate ./...   # 等价于 oapi-codegen -generate types,server,spec api/search/openapi.yaml > codegen/search_api.go
 
 # 部署到运行中的系统
-bash nimo_os_docs/scripts/deploy.sh search
+bash scripts/deploy.sh search
 ```
 
 systemd 单元使用 `Type=notify`,`SdNotify(Ready)` 在 Gateway 注册成功后发出。

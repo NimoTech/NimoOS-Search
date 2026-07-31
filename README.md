@@ -1,14 +1,50 @@
 # NimoOS-Search
 
-NimoOS RAG retrieval API service. See spec at
-`nimo_os_docs/docs/superpowers/specs/2026-05-22-nimoos-search-design.md`.
+RAG retrieval API for NimoOS — aggregates a filename index and vector recall across sources behind `/v1/search`.
 
-## Build
-```bash
-go build -o nimoos-search .
-```
+> ### About
+>
+> NimoOS is a fork of [CasaOS](https://github.com/IceWhaleTech/CasaOS)
+> (Apache-2.0), originally developed by IceWhale Technology Co., Ltd.
+> Building on that foundation, NimoOS adds an AI agent, RAG-based retrieval,
+> a knowledge layer, and a built-in web terminal.
+>
+> See [`NOTICE`](./NOTICE) for attribution details. CasaOS and IceWhale are
+> trademarks of IceWhale Technology Co., Ltd.; NimoOS is an independent
+> project and is not affiliated with IceWhale.
+>
+> This repository is NimoTech's own work and contains no CasaOS-derived code.
 
-## Dev
+
+> ⚠️ Multi-user isolation is incomplete — Photos and Search are not yet
+> per-user scoped. Read
+> [SECURITY.md](https://github.com/NimoTech/NimoOS/blob/main/SECURITY.md#known-limitations)
+> before deploying NimoOS for more than one person.
+
+
+## Building
+
+NimoOS is a multi-repository project. Every Go service uses a `replace`
+directive pointing at the local `NimoOS-Common` checkout, so a build needs the
+full workspace — see
+[NimoOS-Build](https://github.com/NimoTech/NimoOS-Build) for the layout and the
+one-line clone helper.
+
+`NimoOS-MessageBus` must be generated first; its generated API code is not
+committed and other services' `go generate` consumes its OpenAPI spec.
+
 ```bash
+CGO_ENABLED=0 go build ./...   # pure Go
 go test ./...
 ```
+
+Go services pin `go 1.21` and echo v4.12 — **do not run `go mod tidy`**.
+
+
+## Documentation
+
+Architecture, request flow and runtime details: [`OVERVIEW.md`](./OVERVIEW.md).
+
+## License
+
+Apache-2.0 — see [`LICENSE`](./LICENSE).
