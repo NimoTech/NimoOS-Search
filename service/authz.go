@@ -177,13 +177,17 @@ func hitToFileChunk(h QdrantHit) FileChunk {
 	return fc
 }
 
-// PhotoCaption 点查单张照片(assetID)的 caption 文本,满足 CaptionSource
-// 接口。file_id 惯例是 "photos:<asset_id>"(见 NimoOS-Parser 写入约定),
-// 复用 ScrollByFileID 的 root_ids 授权交集(与 GetFileChunks 等同一套语义)。
-// 5 条足够——一张照片正常只有一条 kind=="caption" 的 chunk,给一点余量以防
-// 未来分段。无命中(没生成过 caption、或不在 allowedRoots 内)返回
-// ("", nil),不是错误:调用方(aggregate images 分支)按 fail-open 处理,
-// 这里不需要额外语义区分"没有"和"查询失败之外的失败"。
+// PhotoCaption looks up the caption text for a single photo (assetID),
+// satisfying the CaptionSource interface. file_id follows the convention
+// "photos:<asset_id>" (see the NimoOS-Parser write-side convention), and
+// reuses ScrollByFileID's root_ids authorization intersection (the same
+// semantics as GetFileChunks etc). 5 is plenty - a photo normally has just
+// one chunk with kind=="caption", this leaves a bit of headroom in case it
+// gets split in the future. No hit (no caption ever generated, or not
+// within allowedRoots) returns ("", nil), which is not an error: the caller
+// (the aggregate images branch) treats it as fail-open, so there's no need
+// here to distinguish "nothing found" from "failure other than a query
+// error".
 func (s *AuthzService) PhotoCaption(ctx context.Context, assetID string, allowedRoots []string) (string, error) {
 	if len(allowedRoots) == 0 {
 		return "", nil
@@ -203,9 +207,10 @@ func (s *AuthzService) PhotoCaption(ctx context.Context, assetID string, allowed
 	return "", nil
 }
 
-// truncateRunes 按 rune(而非 byte)截断 s 到最多 max 个 rune,超长时在末尾
-// 加省略号 "…"。rune 截断是因为 caption 常含多字节字符(中文/emoji),按
-// byte 切会切碎字符产生乱码。
+// truncateRunes truncates s to at most max runes (not bytes), appending an
+// ellipsis "…" when it overflows. We truncate by rune because captions
+// often contain multi-byte characters (CJK/emoji); cutting by byte would
+// split a character and produce garbled output.
 func truncateRunes(s string, max int) string {
 	runes := []rune(s)
 	if len(runes) <= max {

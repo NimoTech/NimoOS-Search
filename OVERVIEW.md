@@ -1,15 +1,15 @@
 # NimoOS-Search
 
-NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索引、图片搜索三路来源聚合为统一的查询入口,同时作为 AI Agent 的 `nimoos_search` / `read_file_chunk` / `read_document` 工具后端。当前版本 `v1.9.0-alpha1`。
+NimoOS's **RAG retrieval API service**, aggregating three sources — semantic file-content search, filename indexing, and image search — into a single unified query entry point, while also serving as the backend for the AI Agent's `nimoos_search` / `read_file_chunk` / `read_document` tools. Current version `v1.9.0-alpha1`.
 
-绑定 localhost、由 Gateway 转发,API 前缀 `/v1/search`。
+Binds to localhost, forwarded by the Gateway, API prefix `/v1/search`.
 
 ---
 
-## 架构概览
+## Architecture Overview
 
 ```
-                外部请求(Gateway :80 转发 /v1/search/*)
+                External request (Gateway :80 forwards /v1/search/*)
                                 │
                                 ▼
            ┌─────────────────────────────────────────────┐
@@ -18,7 +18,8 @@ NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索�
            │                                             │
            │  Aggregator                                 │
            │  ┌──────────────┬──────────────┬──────────┐ │
-           │  │ 语义检索      │ 文件名索引    │ 图片搜索  │ │
+           │  │ Semantic      │ Filename      │ Image     │ │
+           │  │ search        │ index         │ search    │ │
            │  │ (SearchSvc)  │ (FileIndex)  │ (Photos) │ │
            │  └──────┬───────┴──────┬───────┴────┬─────┘ │
            └─────────┼──────────────┼────────────┼───────┘
@@ -28,202 +29,206 @@ NimoOS 的 **RAG 检索 API 服务**,把文件内容语义检索、文件名索�
         ▼            ▼              ▼            ▼
   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐
   │ Qdrant   │  │ Parser   │  │ SQLite   │  │ NimoOS-Photos  │
-  │ :6333/   │  │ :8283    │  │ search   │  │ (可选,按        │
-  │ :6334    │  │ (embed/  │  │ .db      │  │  photos.url     │
-  │ (gRPC)   │  │  rerank/ │  │ 文件名    │  │  发现)          │
-  │ 向量库    │  │  expand) │  │ 三元组索引│  └────────────────┘
-  └──────────┘  └──────────┘  └──────────┘
+  │ :6333/   │  │ :8283    │  │ search   │  │ (optional,     │
+  │ :6334    │  │ (embed/  │  │ .db      │  │  discovered via│
+  │ (gRPC)   │  │  rerank/ │  │ filename │  │  photos.url)    │
+  │ vector   │  │  expand) │  │ triple   │  └────────────────┘
+  │ store    │  └──────────┘  │ index    │
+  └──────────┘                └──────────┘
                      │
         ┌────────────┘
         ▼
   ┌──────────────┐
   │ NimoOS-Wiki  │
   │ wiki.url     │
-  │ 服务发现直连  │
+  │ service      │
+  │ discovery,   │
+  │ direct       │
+  │ connection   │
   │ /v1/wiki/    │
   │ _internal/   │
   │ user-roots   │
   └──────────────┘
-        (用户存储根目录鉴权)
+        (authorization for the user's storage root directories)
 ```
 
-**数据流(语义检索)**:用户 query → Parser Embed (BGE-M3) → Qdrant 混合搜索 (dense + sparse/BM25) → Parser Rerank (BGE-Reranker-v2-m3) → Parser ExpandFiles 补全路径 → 返回 Hits。
+**Data flow (semantic search)**: user query → Parser Embed (BGE-M3) → Qdrant hybrid search (dense + sparse/BM25) → Parser Rerank (BGE-Reranker-v2-m3) → Parser ExpandFiles fills in paths → return Hits.
 
-**数据流(文件名检索)**:用户 query → 分词 → SQLite FTS5 trigram(或 LIKE 降级)→ 按匹配分 + mtime 排序。
+**Data flow (filename search)**: user query → tokenize → SQLite FTS5 trigram (or LIKE fallback) → sort by match score + mtime.
 
-**数据流(图片检索)**:代理 `POST /v1/photos/search/smart`,携带 `X-NimoOS-User-ID` 透传。
+**Data flow (image search)**: proxies `POST /v1/photos/search/smart`, passing through `X-NimoOS-User-ID`.
 
 ---
 
-## API 路由(`/v1/search`)
+## API Routes (`/v1/search`)
 
-| Method | Path | 用途 |
+| Method | Path | Purpose |
 |---|---|---|
-| GET | `/healthz` | 健康检查 |
-| POST | `/v1/search/text` | 语义检索(embed → Qdrant → rerank → expand) |
-| GET | `/v1/search/file` | 获取文件全部 chunks(按 `file_id`,分页) |
-| GET | `/v1/search/chunk` | 获取指定 chunk 及上下文窗口(±window) |
-| GET | `/v1/search/agent/tools` | 返回 Agent 可用工具的 OpenAI function schema(当前 3 个) |
-| POST | `/v1/search/agent/tool` | 分发 Agent 工具调用(`nimoos_search` / `read_file_chunk` / `read_document`) |
-| GET | `/v1/search/agent/filters-schema` | 返回 filters 参数的 JSON Schema |
-| POST | `/v1/search/visual` | 图片语义搜索(代理 NimoOS-Photos;未发现时 503) |
-| GET | `/v1/search/settings` | 获取运行时可调设置 |
-| PUT | `/v1/search/settings` | 更新设置(部分字段热生效,部分需重启) |
-| POST | `/v1/search/fileindex/rescan` | 触发文件名索引手动重扫 |
-| GET | `/v1/search/fileindex/status` | 文件名索引状态 + inotify 配额信息 |
-| GET | `/v1/search/_internal/health` | 内部健康检查(不注册至 Gateway) |
-| GET | `/v1/search/_internal/stats` | 内部 KPI 快照(rerank 降级率 / embed cache 命中率) |
-| POST | `/v1/search/_internal/warm` | 触发 BGE-M3 预热 |
-| POST | `/v1/search/hybrid` | 占位 503(跨模态 hybrid,等 Parser 图像 pipeline) |
-| GET | `/v1/search/thumb/:file_id` | 占位 404(缩略图服务未实现) |
+| GET | `/healthz` | Health check |
+| POST | `/v1/search/text` | Semantic search (embed → Qdrant → rerank → expand) |
+| GET | `/v1/search/file` | Get all chunks of a file (by `file_id`, paginated) |
+| GET | `/v1/search/chunk` | Get a specific chunk plus its context window (±window) |
+| GET | `/v1/search/agent/tools` | Return the OpenAI function schema for tools available to the Agent (currently 3) |
+| POST | `/v1/search/agent/tool` | Dispatch an Agent tool call (`nimoos_search` / `read_file_chunk` / `read_document`) |
+| GET | `/v1/search/agent/filters-schema` | Return the JSON Schema for the filters parameter |
+| POST | `/v1/search/visual` | Image semantic search (proxies NimoOS-Photos; 503 when undiscovered) |
+| GET | `/v1/search/settings` | Get runtime-tunable settings |
+| PUT | `/v1/search/settings` | Update settings (some fields take effect live, some require a restart) |
+| POST | `/v1/search/fileindex/rescan` | Trigger a manual filename-index rescan |
+| GET | `/v1/search/fileindex/status` | Filename index status + inotify quota info |
+| GET | `/v1/search/_internal/health` | Internal health check (not registered with the Gateway) |
+| GET | `/v1/search/_internal/stats` | Internal KPI snapshot (rerank fallback rate / embed cache hit rate) |
+| POST | `/v1/search/_internal/warm` | Trigger a BGE-M3 warm-up |
+| POST | `/v1/search/hybrid` | Placeholder 503 (cross-modal hybrid, pending the Parser image pipeline) |
+| GET | `/v1/search/thumb/:file_id` | Placeholder 404 (thumbnail service not implemented) |
 
 ---
 
-## 三路聚合策略(`Aggregator`)
+## Three-Way Aggregation Strategy (`Aggregator`)
 
-`Aggregator.Aggregate()` 通过 `errgroup` **并发**扇出到三个来源,任意来源失败只降级(写 warnings),不影响整体响应:
+`Aggregator.Aggregate()` fans out **concurrently** to three sources via `errgroup`; any source failing just degrades (writes a warning) without affecting the overall response:
 
-| 来源 | 字段 `sources` | 读取后端 | TopK 配置 |
+| Source | Field `sources` | Backend | TopK config |
 |---|---|---|---|
-| 语义向量 | `"semantic"` | Qdrant `text_chunks` 集合 | `semantic_top_k`(默认 5) |
-| 文件名索引 | `"filenames"` | SQLite `search.db` | `filename_top_k`(默认 5) |
-| 图片 | `"images"` | NimoOS-Photos `smart_search` | `image_top_k`(默认 5) |
+| Semantic vector | `"semantic"` | Qdrant `text_chunks` collection | `semantic_top_k` (default 5) |
+| Filename index | `"filenames"` | SQLite `search.db` | `filename_top_k` (default 5) |
+| Images | `"images"` | NimoOS-Photos `smart_search` | `image_top_k` (default 5) |
 
-`sources` 为空时使用 `default_sources`(默认三路全开)。聚合结果总条目上限由 `max_total_results`(默认 15)按 1/3 比例均等截断。
+When `sources` is empty, `default_sources` is used (all three on by default). The overall cap on aggregated result count is `max_total_results` (default 15), truncated evenly across the three sources at a 1/3 ratio each.
 
-**Agent 工具**(`service/agent_tools.go`,`Invoke()` 分发,route 层注入 allowedRoots 保证不越权):
+**Agent tools** (`service/agent_tools.go`, dispatched via `Invoke()`, with the route layer injecting allowedRoots to prevent privilege escalation):
 
-| 工具 | 作用 |
+| Tool | Purpose |
 |---|---|
-| `nimoos_search` | 调用 `Aggregator.Aggregate()`,返回 `groups.{semantic, filenames, images}`,每个 Hit 截断路径至 3 条、preview 至 200 字符,保护 LLM 上下文窗口 |
-| `read_file_chunk` | 按 `file_id + kind + chunk_no` 取 chunk 及 ±window 上下文(`AuthzService.GetChunkWindow`) |
-| `read_document` | 按 `file_id` 重建**全文**(file-reader M1):`AuthzService.GetDocumentText` 从 Qdrant `ScrollByFileID` 拉取全部 body chunks 按 chunk_no 拼接,页码变化处插入 `[Page N]` 标记;参数 `offset` / `max_chars`(默认 24000)分页,响应带 `truncated` / `total_chars` / `next_offset` |
+| `nimoos_search` | Calls `Aggregator.Aggregate()`, returns `groups.{semantic, filenames, images}`; each Hit's paths are truncated to 3 entries and preview to 200 characters to protect the LLM's context window |
+| `read_file_chunk` | Fetches a chunk plus its ±window context by `file_id + kind + chunk_no` (`AuthzService.GetChunkWindow`) |
+| `read_document` | Reconstructs the **full text** by `file_id` (file-reader M1): `AuthzService.GetDocumentText` pulls all body chunks from Qdrant `ScrollByFileID`, concatenates them in chunk_no order, inserting a `[Page N]` marker wherever the page number changes; paginated via `offset` / `max_chars` (default 24000) params, response includes `truncated` / `total_chars` / `next_offset` |
 
 ---
 
-## 语义检索流水线(`SearchService`)
+## Semantic Search Pipeline (`SearchService`)
 
 ```
 query
   │
   ├─ 1. EmbedCache.GetOrLoad(SHA256(query))
-  │      singleflight 并发去重 → POST /v1/parser/embed (BGE-M3)
-  │      返回 dense(float32[]) + sparse(BM25 Indices/Values)
+  │      singleflight dedupes concurrent calls → POST /v1/parser/embed (BGE-M3)
+  │      returns dense(float32[]) + sparse(BM25 Indices/Values)
   │
   ├─ 2. Qdrant.SearchTextHybrid
-  │      prefetch: sparse BM25 向量("bm25" using, limit×2)
-  │      query: dense 向量("dense" using)
+  │      prefetch: sparse BM25 vector ("bm25" using, limit×2)
+  │      query: dense vector ("dense" using)
   │      filter: root_ids / mime / kind / lang / mtime_after_ms
-  │      candidates: RerankerCandidates(默认 40)
+  │      candidates: RerankerCandidates (default 40)
   │
   ├─ 3. Rerank: POST /v1/parser/rerank (BGE-Reranker-v2-m3)
-  │      失败时 fallback → 保留 Qdrant raw_score,写 warnings["rerank_unavailable"]
+  │      on failure, falls back → keeps Qdrant raw_score, writes warnings["rerank_unavailable"]
   │
   ├─ 4. Sort by Score desc
-  │      GroupByFile 模式:按 file_id 归并,取 top_k 个文件 × max_chunks_per_file
+  │      GroupByFile mode: merges by file_id, taking top_k files × max_chunks_per_file
   │
   └─ 5. ExpandFiles: GET /v1/parser/_internal/files?file_ids=
-         补全每个 Hit 的 Paths(FilePath[]{root_id, path, mtime_ms}) + mime
+         fills in each Hit's Paths (FilePath[]{root_id, path, mtime_ms}) + mime
 ```
 
 ---
 
-## 文件名索引(`fileindex.Subsystem`)
+## Filename Index (`fileindex.Subsystem`)
 
-SQLite 表 `file_index`,可选 FTS5 trigram 加速,存储文件的 path / name / ext / size / mtime_ms / root。
+SQLite table `file_index`, with optional FTS5 trigram acceleration, storing each file's path / name / ext / size / mtime_ms / root.
 
-**启动行为**:
-1. `PurgeOutside(roots)` — 清理数据库中不属于当前根目录集的旧记录
-2. `BootScan(roots)` — 全量 WalkDir upsert
-3. `Watcher.Start()` — fsnotify 监听 Create/Write/Remove/Rename 事件,对新目录递归添加 watch
+**Startup behavior**:
+1. `PurgeOutside(roots)` — cleans up stale rows in the database that no longer belong to the current set of root directories
+2. `BootScan(roots)` — full WalkDir upsert
+3. `Watcher.Start()` — fsnotify listens for Create/Write/Remove/Rename events, recursively adding watches for new directories
 
-**实时根目录热更新**:`PUT /v1/search/settings` 修改 `fileindex_roots` 后立即调用 `ReloadRoots()`,无需重启服务(PurgeOutside + 重新扫描在后台执行)。
+**Live root directory hot updates**: `PUT /v1/search/settings` immediately calls `ReloadRoots()` after changing `fileindex_roots`, no service restart needed (PurgeOutside + rescan run in the background).
 
-**降级机制**:inotify watch 数量耗尽时(ENOSPC/EMFILE),watcher 进入降级模式,退化为按 `fileindex_scan_interval_h`(正常态,默认 6h)/ `fileindex_degraded_scan_interval_h`(降级态,默认 1h)定期 Reconcile 扫描,并通过 MessageBus 发送 `Search:Warning{kind:"fileindex_watch_degraded"}` 事件。
+**Degradation mechanism**: when the number of inotify watches is exhausted (ENOSPC/EMFILE), the watcher enters degraded mode, falling back to periodic Reconcile scans at `fileindex_scan_interval_h` (normal state, default 6h) / `fileindex_degraded_scan_interval_h` (degraded state, default 1h), and sends a `Search:Warning{kind:"fileindex_watch_degraded"}` event via MessageBus.
 
-**跳过规则**:隐藏文件(`.` 开头)、`node_modules`、`@eaDir`(Synology 专有目录)、`.git`、`__pycache__`。
+**Skip rules**: hidden files (starting with `.`), `node_modules`, `@eaDir` (Synology-specific directory), `.git`, `__pycache__`.
 
-**系统挂载点排除**(`Index.SetExcludes`,`service/fileindex/index.go`):`[fileindex] Exclude` 配置一组绝对路径子树,默认排除 NimoOS overlay-root 的系统挂载 `/media/root-ro`、`/media/root-rw`、`/mnt/overlay`、`/mnt/metadata` —— 否则扫描 `/mnt` / `/media` 会把整个 OS 根文件系统(数十万系统文件)索引进来,每次重启/周期扫描都跑满一个 CPU 核数十分钟。排除集在 BootScan / ScanInto / Reconcile 及 watcher(递归添加 watch + Create 事件)全部生效;Reconcile 会删掉落入新排除子树的存量行,升级后旧索引自清理。
+**System mount point exclusion** (`Index.SetExcludes`, `service/fileindex/index.go`): the `[fileindex] Exclude` config specifies a set of absolute path subtrees; by default it excludes the NimoOS overlay-root system mounts `/media/root-ro`, `/media/root-rw`, `/mnt/overlay`, `/mnt/metadata` — otherwise scanning `/mnt` / `/media` would pull the entire OS root filesystem (hundreds of thousands of system files) into the index, saturating a full CPU core for tens of minutes on every restart/periodic scan. The exclusion set applies across BootScan / ScanInto / Reconcile and the watcher (recursive watch-adding + Create events); Reconcile also removes existing rows that fall into a newly-excluded subtree, so old indexes self-clean after an upgrade.
 
 ---
 
-## 运行时可调设置(`SearchSettings`)
+## Runtime-Tunable Settings (`SearchSettings`)
 
-持久化至 `/var/lib/nimoos/search-settings.json`(JSON),启动时与 INI 配置合并,`PUT /v1/search/settings` 原子写入后热切换。
+Persisted to `/var/lib/nimoos/search-settings.json` (JSON), merged with the INI config at startup; `PUT /v1/search/settings` writes atomically and switches over live.
 
-| 字段 | 类型 | 热生效 | 说明 |
+| Field | Type | Live | Description |
 |---|---|---|---|
-| `default_sources` | string[] | 是 | 聚合默认来源,可选 `semantic`/`filenames`/`images` |
-| `semantic_top_k` | int [1,20] | 是 | 语义来源每次取的 Top-K |
-| `filename_top_k` | int [1,20] | 是 | 文件名来源 Top-K |
-| `image_top_k` | int [1,20] | 是 | 图片来源 Top-K |
-| `max_total_results` | int [1,60] | 是 | 三路合计上限(等比例截断) |
-| `fileindex_roots` | string[] | 是(ReloadRoots) | 索引根目录 |
-| `fileindex_enabled` | bool | 否(需重启) | 是否启用文件名索引 |
-| `fileindex_scan_interval_h` | int | 否(需重启) | 正常态周期扫描间隔(小时) |
+| `default_sources` | string[] | Yes | Default aggregation sources, one or more of `semantic`/`filenames`/`images` |
+| `semantic_top_k` | int [1,20] | Yes | Top-K fetched per query from the semantic source |
+| `filename_top_k` | int [1,20] | Yes | Top-K for the filename source |
+| `image_top_k` | int [1,20] | Yes | Top-K for the image source |
+| `max_total_results` | int [1,60] | Yes | Combined cap across all three sources (truncated proportionally) |
+| `fileindex_roots` | string[] | Yes (ReloadRoots) | Index root directories |
+| `fileindex_enabled` | bool | No (restart required) | Whether the filename index is enabled |
+| `fileindex_scan_interval_h` | int | No (restart required) | Periodic scan interval in normal state (hours) |
 
-`PUT` 响应中包含 `restart_required` 字段,告知调用方是否需要重启服务。
-
----
-
-## 鉴权与用户范围
-
-**鉴权方式**:Search 服务自身**不校验 JWT**,依赖 Gateway 在转发前完成 JWT 验证并注入 `X-NimoOS-User-ID` Header。`InjectUserID` 中间件从 Header 读取 UID 存入 Echo context。
-
-**根目录授权**:每个请求调用 `WikiClient.UserRoots(ctx, uid)` 获取该用户被允许访问的 root_id 列表(60s LRU 缓存),再与请求中的 `filters.root_ids` 取交集(`ApplyScope`)。所有数据端点(text / file / chunk / agent/tool)都执行此授权检查。交集为空时返回 200 + `warnings["no_accessible_roots"]`(而非 403,避免泄露 file_id 存在性)。
-
-**localhost / Unix socket 豁免**:由 Gateway 层面处理,Search 服务本身不实现豁免逻辑。
+The `PUT` response includes a `restart_required` field telling the caller whether a service restart is needed.
 
 ---
 
-## 依赖服务
+## Authorization and User Scope
 
-| 服务 | 通信方式 | 用途 | 发现方式 |
+**Authorization method**: the Search service itself **does not validate JWTs**; it relies on the Gateway completing JWT validation before forwarding and injecting the `X-NimoOS-User-ID` header. The `InjectUserID` middleware reads the UID from the header and stores it in the Echo context.
+
+**Root directory authorization**: every request calls `WikiClient.UserRoots(ctx, uid)` to get the list of root_ids that user is allowed to access (60s LRU cache), then intersects it with the request's `filters.root_ids` (`ApplyScope`). All data endpoints (text / file / chunk / agent/tool) enforce this authorization check. When the intersection is empty, returns 200 + `warnings["no_accessible_roots"]` (rather than 403, to avoid leaking whether a file_id exists).
+
+**localhost / Unix socket exemption**: handled at the Gateway level; the Search service itself doesn't implement any exemption logic.
+
+---
+
+## Dependent Services
+
+| Service | Communication | Purpose | Discovery |
 |---|---|---|---|
-| **NimoOS-Parser** | HTTP | embed(BGE-M3)/ rerank(BGE-Reranker-v2-m3)/ expand_files | `/var/run/nimoos/parser.url` |
-| **Qdrant** | gRPC `:6334` | 向量混合检索(只读),集合 `text_chunks` | 配置 `QdrantURL`/`QdrantGRPCPort` |
-| **NimoOS-Wiki** | HTTP 直连 | 获取用户可访问 root_ids(`/v1/wiki/_internal/user-roots`) | `/var/run/nimoos/wiki.url` |
-| **NimoOS-Photos** | HTTP | 图片语义搜索代理 | `/var/run/nimoos/photos.url`(可选) |
-| **NimoOS-Gateway** | HTTP | 路由注册 (`POST /v1/gateway/routes`) | `/var/run/nimoos/management.url` |
-| **NimoOS-MessageBus** | Unix socket | 发布警告/KPI 事件(best-effort) | `/var/run/nimoos/message-bus.sock` |
+| **NimoOS-Parser** | HTTP | embed (BGE-M3) / rerank (BGE-Reranker-v2-m3) / expand_files | `/var/run/nimoos/parser.url` |
+| **Qdrant** | gRPC `:6334` | vector hybrid search (read-only), collection `text_chunks` | config `QdrantURL`/`QdrantGRPCPort` |
+| **NimoOS-Wiki** | direct HTTP | fetches the user's accessible root_ids (`/v1/wiki/_internal/user-roots`) | `/var/run/nimoos/wiki.url` |
+| **NimoOS-Photos** | HTTP | image semantic search proxy | `/var/run/nimoos/photos.url` (optional) |
+| **NimoOS-Gateway** | HTTP | route registration (`POST /v1/gateway/routes`) | `/var/run/nimoos/management.url` |
+| **NimoOS-MessageBus** | Unix socket | publishes warning/KPI events (best-effort) | `/var/run/nimoos/message-bus.sock` |
 
-Photos 未发现时服务正常启动,`/v1/search/visual` 返回 503,聚合的 `images` 来源自动跳过。
+When Photos is undiscovered, the service starts normally; `/v1/search/visual` returns 503, and the aggregated `images` source is automatically skipped.
 
-> **Wiki 不再走公网 Gateway**:Gateway 已拒绝所有 `/_internal/` 路径(NimoOS-Gateway e2c9b9c),user-roots 改为读 `WikiDiscoveryPath`(`wiki.url`)直连 Wiki 服务,与 ParserClient 同法(`main.go` `newWikiClient`)。发现文件缺失时客户端仍装配,但每次调用失败,数据端点降级为 503。
+> **Wiki no longer goes through the public Gateway**: the Gateway already rejects all `/_internal/` paths (NimoOS-Gateway e2c9b9c); user-roots now reads `WikiDiscoveryPath` (`wiki.url`) to connect to the Wiki service directly, the same approach as ParserClient (`main.go` `newWikiClient`). When the discovery file is missing, the client still gets assembled, but every call fails and data endpoints degrade to 503.
 
 ---
 
-## MessageBus 事件
+## MessageBus Events
 
-每 60 秒由后台 goroutine 发布一次 KPI 快照:
+A background goroutine publishes a KPI snapshot every 60 seconds:
 
-| 事件 | 触发条件 |
+| Event | Trigger condition |
 |---|---|
-| `Search:Warning` | embedder 不可用、fileindex watch 降级等异常 |
-| `Search:RerankFallbackRate` | 定期:rerank 失败降级比率 |
-| `Search:CacheHitRate` | 定期:embed cache 命中率 |
+| `Search:Warning` | anomalies such as the embedder being unavailable or fileindex watch degradation |
+| `Search:RerankFallbackRate` | periodic: rerank fallback rate |
+| `Search:CacheHitRate` | periodic: embed cache hit rate |
 
 ---
 
-## 数据/运行时布局
+## Data / Runtime Layout
 
 ```
-/etc/nimoos/nimoos-search.conf      配置文件(INI),缺失时全用默认值
-/var/lib/nimoos/db/search.db        文件名索引 SQLite(fileindex)
-/var/lib/nimoos/search-settings.json 运行时可调设置
-/var/log/nimoos/                    日志
-/var/run/nimoos/search.url          服务发现地址(随机端口,启动时写入)
+/etc/nimoos/nimoos-search.conf      config file (INI), all defaults apply if missing
+/var/lib/nimoos/db/search.db        filename index SQLite (fileindex)
+/var/lib/nimoos/search-settings.json runtime-tunable settings
+/var/log/nimoos/                    logs
+/var/run/nimoos/search.url          service discovery address (random port, written at startup)
 ```
 
-**Qdrant 集合**(由 Parser 写入,Search 只读):
+**Qdrant collections** (written by Parser, Search is read-only):
 
-| 集合 | 内容 |
+| Collection | Contents |
 |---|---|
-| `text_chunks` | 所有文本模态 chunk(body / ocr / caption / transcript / summary),每条含 dense + sparse 向量、payload(file_id / root_ids / kind / mime / text / chunk_no / mtime_ms 等) |
+| `text_chunks` | all text-modality chunks (body / ocr / caption / transcript / summary), each with a dense + sparse vector and payload (file_id / root_ids / kind / mime / text / chunk_no / mtime_ms, etc.) |
 
 ---
 
-## 配置参考(`/etc/nimoos/nimoos-search.conf`)
+## Config Reference (`/etc/nimoos/nimoos-search.conf`)
 
 ```ini
 [common]
@@ -251,7 +256,7 @@ MessageBusSocket     = /var/run/nimoos/message-bus.sock
 [fileindex]
 Enabled            = true
 Roots              = /DATA,/mnt,/media
-; 永不索引/监视的子树,默认 NimoOS overlay-root 系统挂载
+; Subtrees never indexed/watched, defaults to NimoOS overlay-root system mounts
 Exclude            = /media/root-ro,/media/root-rw,/mnt/overlay,/mnt/metadata
 DBPath             = /var/lib/nimoos/db/search.db
 ScanIntervalH      = 6
@@ -267,65 +272,65 @@ ImageTopK       = 5
 MaxTotalResults = 15
 ```
 
-所有字段均有代码默认值,配置文件缺失时服务正常启动。也可用环境变量覆盖(`SEARCH_BIND_HOST`、`SEARCH_QDRANT_URL`、`SEARCH_FILEINDEX_ENABLED` 等)。
+Every field has a code-level default, so the service starts normally even if the config file is missing. Can also be overridden via environment variables (`SEARCH_BIND_HOST`, `SEARCH_QDRANT_URL`, `SEARCH_FILEINDEX_ENABLED`, etc.).
 
 ---
 
-## 构建与部署
+## Build and Deploy
 
 ```bash
-# 构建(纯 Go,无 CGO 依赖)
+# Build (pure Go, no CGO dependency)
 cd NimoOS-Search && go build -o nimoos-search .
 
-# 测试
+# Test
 go test ./...
 
-# 重新生成 OpenAPI 代码
-go generate ./...   # 等价于 oapi-codegen -generate types,server,spec api/search/openapi.yaml > codegen/search_api.go
+# Regenerate OpenAPI code
+go generate ./...   # equivalent to oapi-codegen -generate types,server,spec api/search/openapi.yaml > codegen/search_api.go
 
-# 部署到运行中的系统
+# Deploy to a running system
 bash scripts/deploy.sh search
 ```
 
-systemd 单元使用 `Type=notify`,`SdNotify(Ready)` 在 Gateway 注册成功后发出。
+The systemd unit uses `Type=notify`; `SdNotify(Ready)` fires after successful registration with the Gateway.
 
 ---
 
-## 关键模块速查
+## Key Module Quick Reference
 
-| 包 | 职责 |
+| Package | Responsibility |
 |---|---|
-| `main.go` | Uber FX 组装、随机端口绑定、写 `search.url`、向 Gateway 注册、EventBus 60s ticker |
-| `route/v1/` | Echo 路由注册;`middleware.go` 注入 User-ID;各端点处理器 |
-| `service/search.go` | 语义检索五段流水线(embed → Qdrant → rerank → sort → expand) |
-| `service/aggregate.go` | 三路并发聚合 + 比例截断 |
-| `service/authz.go` | file/chunk 鉴权(root_id 交集校验)+ `GetDocumentText` 全文重建 |
-| `service/fileindex/` | SQLite 文件名索引:Index / Scan / Watch / Subsystem |
-| `service/settings.go` | 运行时设置读写(RWMutex + 原子文件写入) |
-| `service/parser_client.go` | Parser HTTP 客户端:embed / rerank / expand_files |
-| `service/wiki_client.go` | Wiki HTTP 客户端:user-roots(60s LRU 缓存) |
-| `service/qdrant_client.go` | Qdrant gRPC 客户端:hybrid search / scroll |
-| `service/photos_client.go` | Photos HTTP 代理客户端:smart_search |
+| `main.go` | Uber FX wiring, random port binding, writes `search.url`, registers with the Gateway, EventBus 60s ticker |
+| `route/v1/` | Echo route registration; `middleware.go` injects User-ID; endpoint handlers |
+| `service/search.go` | Five-stage semantic search pipeline (embed → Qdrant → rerank → sort → expand) |
+| `service/aggregate.go` | Three-way concurrent aggregation + proportional truncation |
+| `service/authz.go` | file/chunk authorization (root_id intersection check) + `GetDocumentText` full-text reconstruction |
+| `service/fileindex/` | SQLite filename index: Index / Scan / Watch / Subsystem |
+| `service/settings.go` | Runtime settings read/write (RWMutex + atomic file write) |
+| `service/parser_client.go` | Parser HTTP client: embed / rerank / expand_files |
+| `service/wiki_client.go` | Wiki HTTP client: user-roots (60s LRU cache) |
+| `service/qdrant_client.go` | Qdrant gRPC client: hybrid search / scroll |
+| `service/photos_client.go` | Photos HTTP proxy client: smart_search |
 | `service/agent_tools.go` | Agent tool schema + `nimoos_search`/`read_file_chunk`/`read_document` dispatch |
-| `service/eventbus.go` | MessageBus Unix socket best-effort 发布;KPI 计数器 |
-| `service/cache.go` | Embed LRU 缓存 + singleflight 并发去重 |
-| `config/config.go` | INI + 环境变量配置加载 |
-| `common/version.go` | 版本常量 `v1.9.0-alpha1` |
+| `service/eventbus.go` | MessageBus Unix socket best-effort publishing; KPI counters |
+| `service/cache.go` | Embed LRU cache + singleflight concurrent dedup |
+| `config/config.go` | INI + environment variable config loading |
+| `common/version.go` | Version constant `v1.9.0-alpha1` |
 
 ---
 
-## 已知问题与运维要点
+## Known Issues and Operational Notes
 
-1. **inotify watch 配额**:大型 NAS(数十万目录)易耗尽内核默认 8192 个 watches。超出后 watcher 自动降级为定期扫描,`GET /v1/search/fileindex/status` 返回 `inotify.raise_cmd` 提示命令。部署后建议执行:
+1. **inotify watch quota**: large NAS setups (hundreds of thousands of directories) can easily exhaust the kernel's default 8192 watches. Once exceeded, the watcher automatically degrades to periodic scanning; `GET /v1/search/fileindex/status` returns an `inotify.raise_cmd` hint command. After deployment, it's recommended to run:
    ```bash
    sudo sysctl -w fs.inotify.max_user_watches=524288
    echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
    ```
 
-2. **启动顺序**:Search 在 `BootScan` 完成后才标记 `ready`(fileindex 状态从 `scanning` 变为 `ready`);Qdrant 和 Parser 需在 Search 之前就绪,否则语义查询返回 503。
+2. **Startup order**: Search only marks itself `ready` after `BootScan` completes (fileindex status changes from `scanning` to `ready`); Qdrant and Parser need to be ready before Search, otherwise semantic queries return 503.
 
-3. **PurgeOutside**:每次根目录变更(含重启时)都会清理数据库中不属于当前 `fileindex_roots` 的记录。若将 `/mnt` 之类宽泛路径改为具体子目录,旧索引会被清除并重建。
+3. **PurgeOutside**: every root directory change (including at restart) cleans up rows in the database that no longer belong to the current `fileindex_roots`. If a broad path like `/mnt` is narrowed to a specific subdirectory, the old index entries get cleared and rebuilt.
 
-4. **Photos 可选**:Photos 服务未发现时,聚合的 `images` 来源静默跳过,不影响 semantic / filenames 两路。
+4. **Photos is optional**: when the Photos service is undiscovered, the aggregated `images` source is silently skipped, without affecting the semantic / filenames sources.
 
-5. **模型版本兼容**:embed 使用 `bge-m3`,rerank 使用 `bge-reranker-v2-m3`,均运行在 NimoOS-Parser 进程中,版本由 Parser 管理。Search 仅传递 `ParserVersion:"parser/0.1.0"` 作为日志标记。
+5. **Model version compatibility**: embed uses `bge-m3`, rerank uses `bge-reranker-v2-m3`, both running inside the NimoOS-Parser process, with versions managed by Parser. Search only passes `ParserVersion:"parser/0.1.0"` as a log marker.

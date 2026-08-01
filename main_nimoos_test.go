@@ -12,9 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 授权源已从 Wiki 切到核心(NimoOS 主服务,见 Task 8)。Gateway 拒绝所有
-// /_internal/ 路径(NimoOS-Gateway e2c9b9c),所以 root 授权查询依旧要经由
-// discovery 文件直连核心。
+// The authorization source moved from Wiki to core (the main NimoOS
+// service, see Task 8). The Gateway rejects all /_internal/ paths
+// (NimoOS-Gateway e2c9b9c), so root authorization queries still have to go
+// through the discovery file directly to core.
 func TestNewNimoOSClientReadsDiscoveryFile(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
