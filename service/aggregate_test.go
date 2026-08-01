@@ -87,9 +87,10 @@ func TestAggregate_NilDependenciesSkip(t *testing.T) {
 	require.Empty(t, resp.Groups.Images)
 }
 
-// capturingQdrant 记录 semantic 源 SearchTextHybrid 收到的 root 过滤条件,
-// 用于断言 ApplyScope 的结果真的被送进了 Qdrant 查询(而不仅仅是内部的
-// Filters 结构体)。
+// capturingQdrant records the root filter condition received by the
+// semantic source's SearchTextHybrid, used to assert that ApplyScope's
+// result really made it into the Qdrant query (not just the internal
+// Filters struct).
 type capturingQdrant struct {
 	hits       []QdrantHit
 	gotRootIDs []string
@@ -106,10 +107,12 @@ func (c *capturingQdrant) ScrollByFileID(context.Context, string, string, []stri
 }
 func (c *capturingQdrant) Count(context.Context, string) (uint64, error) { return 0, nil }
 
-// TestAggregate_PhotosRootPassesScope 是"授权源解耦"项目的最终验收点:
-// allowed 集里含核心 seed root "photos"(请求不显式指定 root_ids)时,
-// aggregate.go semantic 源里的 ApplyScope 调用不应把它过滤掉——
-// 即 text_chunks 里 root_ids=["photos"] 的 caption 能被语义检索命中。
+// TestAggregate_PhotosRootPassesScope is the final acceptance point of the
+// "authorization source decoupling" project: when the allowed set contains
+// the core seed root "photos" (request doesn't explicitly specify
+// root_ids), the ApplyScope call in aggregate.go's semantic source
+// shouldn't filter it out - i.e. a caption in text_chunks with
+// root_ids=["photos"] can still be hit by semantic search.
 func TestAggregate_PhotosRootPassesScope(t *testing.T) {
 	q := &capturingQdrant{hits: []QdrantHit{
 		{PointID: "p1", Score: 0.8, Payload: map[string]any{
@@ -129,8 +132,8 @@ func TestAggregate_PhotosRootPassesScope(t *testing.T) {
 		Query: "cat", AllowedRoots: []string{"photos"},
 	})
 
-	require.Empty(t, resp.Warnings, "photos 不应被 no_accessible_roots 挡掉")
-	require.Contains(t, q.gotRootIDs, "photos", "ApplyScope 应把 photos 放进 semantic 查询的 root 过滤")
+	require.Empty(t, resp.Warnings, "photos should not be blocked by no_accessible_roots")
+	require.Contains(t, q.gotRootIDs, "photos", "ApplyScope should put photos into the semantic query's root filter")
 	require.Len(t, resp.Groups.Semantic, 1)
 }
 
@@ -184,8 +187,9 @@ func TestAggregate_NotesFailureDegrades(t *testing.T) {
 	require.Empty(t, resp.Groups.Notes)
 }
 
-// fakeCaptions 实现 CaptionSource:按 assetID 查表返回 caption,或统一返回 err
-// (用来模拟 Qdrant 点查失败,验证 fail-open)。
+// fakeCaptions implements CaptionSource: looks up a caption by assetID from
+// a map, or always returns err (used to simulate a Qdrant point-lookup
+// failure and verify fail-open).
 type fakeCaptions struct {
 	m   map[string]string
 	err error
@@ -213,7 +217,7 @@ func TestAggregate_ImagesCarryCaption(t *testing.T) {
 		byID[h.AssetID] = h
 	}
 	require.Equal(t, "A large dam across a river valley", byID["a1"].Caption)
-	require.Empty(t, byID["a2"].Caption, "无 caption 命中不应报错,留空即可")
+	require.Empty(t, byID["a2"].Caption, "no caption hit should not error, just leave it blank")
 }
 
 func TestAggregate_ImagesCaptionFailOpen(t *testing.T) {
@@ -225,17 +229,17 @@ func TestAggregate_ImagesCaptionFailOpen(t *testing.T) {
 
 	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
 
-	require.Len(t, resp.Groups.Images, 2, "fail-open: caption 查询失败不影响命中数")
+	require.Len(t, resp.Groups.Images, 2, "fail-open: a caption query failure must not affect the hit count")
 	for _, h := range resp.Groups.Images {
 		require.Empty(t, h.Caption)
 	}
 	for _, w := range resp.Warnings {
-		require.NotContains(t, w, "caption", "fail-open: 不应新增 caption 相关 warning")
+		require.NotContains(t, w, "caption", "fail-open: should not add a caption-related warning")
 	}
 }
 
 func TestAggregate_ImagesCaptionTruncated(t *testing.T) {
-	long := strings.Repeat("测", 150) + strings.Repeat("a", 150) // 300 runes,含多字节字符
+	long := strings.Repeat("测", 150) + strings.Repeat("a", 150) // 300 runes, includes multi-byte characters
 	agg := newAggForTest(nil, fakeImageSearcher{hits: []ImageHit{{AssetID: "a1", Name: "dam.jpg"}}})
 	agg.Captions = &fakeCaptions{m: map[string]string{"a1": long}}
 

@@ -17,10 +17,12 @@ type ImageHit struct {
 	Score        float64 `json:"score"`
 	TakenAt      string  `json:"taken_at,omitempty"`
 	ThumbnailURL string  `json:"thumbnail_url"`
-	// Caption 是 aggregate 层附着的 photos caption 文本(来自 text_chunks
-	// kind=="caption"),可能为空(未生成 caption 或点查失败,fail-open)。
-	// 放在这里而不是单独一个字段路径,是因为 UI 卡片渲染和 agent 工具结果
-	// 走的是同一份 ImageHit JSON,加一个字段两边同时受益。
+	// Caption is the photos caption text attached by the aggregate layer
+	// (from text_chunks kind=="caption"); may be empty (caption never
+	// generated, or lookup failed, fail-open). It lives here rather than on
+	// a separate field path because the UI card rendering and the agent
+	// tool result both go through the same ImageHit JSON, so adding one
+	// field benefits both sides at once.
 	Caption string `json:"caption,omitempty"`
 }
 

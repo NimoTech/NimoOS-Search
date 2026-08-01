@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
-// NimoOSClient 向核心(NimoOS 主服务)拉取用户被授权的 root_ids。
-// 用于替代原来经由 Wiki 转发的 WikiClient.UserRoots(见 Task 8)。
+// NimoOSClient pulls the root_ids a user is authorized for from core (the
+// main NimoOS service). Replaces the old WikiClient.UserRoots that went
+// through Wiki (see Task 8).
 type NimoOSClient struct {
 	src      *BaseURLSource
 	hc       *http.Client
@@ -35,7 +36,8 @@ func NewNimoOSClient(src *BaseURLSource, cacheTTL time.Duration) *NimoOSClient {
 	}
 }
 
-// SearchRoots 返回给定用户被授权访问的 root_ids,按 userID 缓存 cacheTTL。
+// SearchRoots returns the root_ids the given user is authorized to access,
+// cached per userID for cacheTTL.
 func (c *NimoOSClient) SearchRoots(ctx context.Context, userID string) ([]string, error) {
 	c.mu.RLock()
 	if e, ok := c.cache[userID]; ok && time.Now().Before(e.exp) {

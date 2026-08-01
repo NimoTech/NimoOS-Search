@@ -27,9 +27,11 @@ func TestBaseURLSourceRefreshPicksUpNewAddress(t *testing.T) {
 }
 
 func TestNimoOSClientRetriesViaDiscoveryOnTransportError(t *testing.T) {
-	// live server = "重启后的新核心(NimoOS 主服务)"。授权源已从 Wiki 切到核心
-	// (见 Task 8),但 doWithRediscover 的重试语义对任何走 BaseURLSource 的
-	// client 都一样,这里改用 NimoOSClient 继续覆盖该行为。
+	// live server = "the restarted new core (main NimoOS service)". The
+	// authorization source moved from Wiki to core (see Task 8), but
+	// doWithRediscover's retry semantics are the same for any client going
+	// through BaseURLSource, so we switch to NimoOSClient here to keep
+	// covering that behavior.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"root_ids":[]}`))
@@ -38,7 +40,8 @@ func TestNimoOSClientRetriesViaDiscoveryOnTransportError(t *testing.T) {
 
 	dir := t.TempDir()
 	f := filepath.Join(dir, "nimoos.url")
-	// 先指向一个必然拒连的端口(占用后立刻关掉的地址)
+	// First point at a port that's guaranteed to refuse connections (an
+	// address that was bound and immediately closed)
 	deadAddr := "http://127.0.0.1:1"
 	require.NoError(t, os.WriteFile(f, []byte(deadAddr), 0644))
 	c := NewNimoOSClient(NewBaseURLSource(f, deadAddr), time.Minute)

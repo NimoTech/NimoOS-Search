@@ -74,10 +74,12 @@ func TestPostSearchText_NoAccessibleRoots(t *testing.T) {
 	require.Contains(t, resp.Warnings, "no_accessible_roots")
 }
 
-// TestPostSearchText_PhotosRootPassesScope 断言:allowed 集含核心 seed root
-// "photos" 时(请求不显式指定 root_ids),ApplyScope 不会把它过滤掉——
-// 即 text_chunks 里 root_ids=["photos"] 的 caption 能被语义检索命中。
-// 这是"授权源解耦"项目的最终验收点(见 task-8-brief.md)。
+// TestPostSearchText_PhotosRootPassesScope asserts that when the allowed set
+// contains the core seed root "photos" (request doesn't explicitly specify
+// root_ids), ApplyScope doesn't filter it out - i.e. a caption in
+// text_chunks with root_ids=["photos"] can still be hit by semantic search.
+// This is the final acceptance point of the "authorization source
+// decoupling" project (see task-8-brief.md).
 func TestPostSearchText_PhotosRootPassesScope(t *testing.T) {
 	q := &capturingQdrantSvc{hits: []service.QdrantHit{
 		{PointID: "p1", Score: 0.9, Payload: map[string]any{
@@ -102,7 +104,7 @@ func TestPostSearchText_PhotosRootPassesScope(t *testing.T) {
 	e.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, q.gotRootIDs, "photos", "ApplyScope 应把 photos 放进传给 Qdrant 的 root 过滤")
+	require.Contains(t, q.gotRootIDs, "photos", "ApplyScope should put photos into the root filter sent to Qdrant")
 	var resp service.SearchResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Len(t, resp.Hits, 1)
@@ -133,8 +135,9 @@ func (f *fakeQdrantSvc) ScrollByFileID(ctx context.Context, c, fid string, roots
 }
 func (f *fakeQdrantSvc) Count(ctx context.Context, c string) (uint64, error) { return 0, nil }
 
-// capturingQdrantSvc 记录传入的 root 过滤条件,用于断言 ApplyScope 的结果确实
-// 被送到了 Qdrant 查询里(而不仅仅是 Filters 结构体本身)。
+// capturingQdrantSvc records the incoming root filter condition, used to
+// assert that ApplyScope's result actually made it into the Qdrant query
+// (not just into the Filters struct itself).
 type capturingQdrantSvc struct {
 	hits       []service.QdrantHit
 	gotRootIDs []string

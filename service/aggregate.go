@@ -23,10 +23,11 @@ type NotesSearcher interface {
 	Query(ctx context.Context, query string, topK int, userID string) ([]NoteHit, error)
 }
 
-// CaptionSource 点查单张照片的 caption 文本,满足者为 *AuthzService(它已经
-// 持有 Qdrant 并复用 ScrollByFileID 的授权语义)。放在 aggregate.go 而非
-// authz.go 声明,是为了让 Aggregator 的依赖面板一眼看全——images 分支要用
-// 到的接口都在这一个文件里。
+// CaptionSource looks up the caption text for a single photo; satisfied by
+// *AuthzService (which already holds Qdrant and reuses ScrollByFileID's
+// authorization semantics). Declared in aggregate.go rather than authz.go so
+// the Aggregator's dependency surface is visible at a glance - every
+// interface the images branch needs lives in this one file.
 type CaptionSource interface {
 	PhotoCaption(ctx context.Context, assetID string, allowedRoots []string) (string, error)
 }
@@ -58,10 +59,13 @@ type Aggregator struct {
 	Photos    ImageSearcher
 	Notes     NotesSearcher
 	Settings  *SettingsStore
-	// Captions 是可选的 caption 点查源;nil 时整段附着逻辑跳过(兼容测试里
-	// 不关心 caption 的既有构造惯例)。非 nil 时对 images 命中逐张附着,
-	// 单张失败/无命中一律 fail-open(留空继续),绝不影响命中数或产生新
-	// warning——caption 只是锦上添花的证据,不是 images 组能否返回的前提。
+	// Captions is an optional caption lookup source; when nil, the whole
+	// attachment logic is skipped (compatible with existing test construction
+	// that doesn't care about captions). When non-nil, it attaches a caption
+	// to each images hit, one at a time; a per-item failure/miss is always
+	// fail-open (leave it blank and continue), never affecting the hit count
+	// or producing a new warning - the caption is just a nice-to-have piece
+	// of evidence, not a precondition for the images group to return.
 	Captions CaptionSource
 }
 
@@ -132,21 +136,26 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 				imgWarn = "images_unavailable"
 				return nil
 			}
-			// 逐张附着 caption 文本,让 agent/UI 拿到的 images 命中不只是文件
-			// 名——否则 LLM 手里只有路径没有文字证据,容易误判"没找到"。
-			// fail-open:Captions==nil 整段跳过(旧行为);单张查询出错或没
-			// 有 caption(空字符串、nil error)都只是让那一张 Caption 留空
-			// 继续,绝不能让 caption 查询的可用性拖累 images 组本身——因此
-			// 这里刻意不设置 imgWarn,也不提前 return。
+			// Attach caption text to each item so the images hits the
+			// agent/UI gets aren't just filenames - otherwise the LLM only
+			// has a path with no textual evidence, and easily misjudges it
+			// as "not found". Fail-open: Captions==nil skips the whole
+			// block (old behavior); a per-item query error or missing
+			// caption (empty string, nil error) just leaves that item's
+			// Caption blank and continues - the availability of caption
+			// lookups must never drag down the images group itself, so we
+			// deliberately don't set imgWarn here, nor return early.
 			if a.Captions != nil {
 				for i := range h {
 					c, cerr := a.Captions.PhotoCaption(ctx, h[i].AssetID, req.AllowedRoots)
 					if cerr != nil {
 						continue
 					}
-					// 截断放在这里(而不是只信赖 CaptionSource 实现自己截断),
-					// 是为了让 aggregate 层对任何 CaptionSource 实现(包括测试
-					// 用的 fake)都有统一、可断言的长度上限。
+					// Truncation happens here (rather than relying solely on
+					// the CaptionSource implementation to truncate) so the
+					// aggregate layer has a uniform, assertable length cap
+					// for any CaptionSource implementation, including test
+					// fakes.
 					h[i].Caption = truncateRunes(c, 200)
 				}
 			}

@@ -100,12 +100,15 @@ func newParserClient(cfg config.Config) (*service.ParserClient, error) {
 }
 
 func newNimoOSClient(cfg config.Config) (*service.NimoOSClient, error) {
-	// 授权源已从 Wiki 切到核心(NimoOS 主服务,见 Task 8)。Gateway 会拒绝所有
-	// /_internal/ 路径(NimoOS-Gateway e2c9b9c),所以 root 授权查询依旧要经由
-	// discovery 文件直连,与 ParserClient 同理:文件缺失时 client 仍会被装配,
-	// 只是每次调用都失败,路由照旧降级为 503。client 内部持有 BaseURLSource,
-	// 一旦核心重启换端口,传输层错误会触发重新读取 discovery 文件 + 重试,
-	// 不必等 Search 自己重启才能自愈。
+	// The authorization source moved from Wiki to core (the main NimoOS
+	// service, see Task 8). The Gateway rejects all /_internal/ paths
+	// (NimoOS-Gateway e2c9b9c), so root authorization queries still have to
+	// go through the discovery file directly, same as ParserClient: if the
+	// file is missing the client still gets assembled, it just fails on
+	// every call and routes still degrade to 503 as before. The client holds
+	// a BaseURLSource internally, so once core restarts on a different port,
+	// a transport error triggers a re-read of the discovery file plus a
+	// retry - Search doesn't have to restart itself to self-heal.
 	src := service.NewBaseURLSource(cfg.NimoOSDiscoveryPath, "http://127.0.0.1")
 	return service.NewNimoOSClient(src,
 		time.Duration(cfg.UserRootsCacheTTLSec)*time.Second), nil
@@ -222,8 +225,9 @@ func newAggregator(s *service.SearchService, sub *fileindex.Subsystem, p *servic
 		agg.Notes = n
 	}
 	if az != nil {
-		// AuthzService 已经持有 Qdrant 并实现了 PhotoCaption(见 authz.go),
-		// 直接复用即可,不需要再造一个专门的 caption 客户端。
+		// AuthzService already holds Qdrant and implements PhotoCaption (see
+		// authz.go), so just reuse it instead of building a dedicated
+		// caption client.
 		agg.Captions = az
 	}
 	return agg

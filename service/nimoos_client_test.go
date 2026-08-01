@@ -26,7 +26,7 @@ func TestNimoOSClient_SearchRoots(t *testing.T) {
 	require.Equal(t, []string{"aabb", "photos"}, got)
 	require.Equal(t, 1, calls)
 
-	// 第二次命中缓存,不再打后端
+	// Second call hits the cache, no request to the backend
 	_, err = c.SearchRoots(context.Background(), "u1")
 	require.NoError(t, err)
 	require.Equal(t, 1, calls)

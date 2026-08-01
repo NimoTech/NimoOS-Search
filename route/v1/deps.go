@@ -19,7 +19,8 @@ type Deps struct {
 }
 
 // RootAuthorizer narrows what routes need from NimoOSClient (testability).
-// 授权源已从 Wiki 切到核心(NimoOS 主服务),见 Task 8。
+// The authorization source moved from Wiki to core (the main NimoOS
+// service), see Task 8.
 type RootAuthorizer interface {
 	SearchRoots(ctx context.Context, userID string) ([]string, error)
 }
