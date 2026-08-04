@@ -283,8 +283,8 @@ go test ./...
 # 重新生成 OpenAPI 代码
 go generate ./...   # 等价于 oapi-codegen -generate types,server,spec api/search/openapi.yaml > codegen/search_api.go
 
-# 部署到运行中的系统
-bash nimo_os_docs/scripts/deploy.sh search
+# 部署到运行中的系统(脚本在公开仓 NimoOS-Build 维护)
+bash <NimoOS-Build>/scripts/deploy.sh search
 ```
 
 systemd 单元使用 `Type=notify`,`SdNotify(Ready)` 在 Gateway 注册成功后发出。

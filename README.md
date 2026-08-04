@@ -1,7 +1,7 @@
 # NimoOS-Search
 
-NimoOS RAG retrieval API service. See spec at
-`nimo_os_docs/docs/superpowers/specs/2026-05-22-nimoos-search-design.md`.
+NimoOS RAG retrieval API service. See `OVERVIEW.md` in this repo for the
+full architecture, route table, and settings matrix.
 
 ## Build
 ```bash
