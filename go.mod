@@ -24,7 +24,7 @@ require (
 )
 
 require (
-	github.com/NimoTech/NimoOS-Common v0.0.0-00010101000000-000000000000
+	github.com/NimoTech/NimoOS-Common v1.9.4-alpha2
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -69,4 +69,3 @@ require (
 	modernc.org/token v1.0.1 // indirect
 )
 
-replace github.com/NimoTech/NimoOS-Common => ../NimoOS-Common
