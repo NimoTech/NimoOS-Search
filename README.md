@@ -24,14 +24,9 @@ RAG retrieval API for NimoOS — aggregates a filename index and vector recall a
 
 ## Building
 
-NimoOS is a multi-repository project. Every Go service uses a `replace`
-directive pointing at the local `NimoOS-Common` checkout, so a build needs the
-full workspace — see
-[NimoOS-Build](https://github.com/NimoTech/NimoOS-Build) for the layout and the
-one-line clone helper.
-
-`NimoOS-MessageBus` must be generated first; its generated API code is not
-committed and other services' `go generate` consumes its OpenAPI spec.
+This repository builds on its own — every dependency, including
+[NimoOS-Common](https://github.com/NimoTech/NimoOS-Common), is an ordinary
+published Go module.
 
 ```bash
 CGO_ENABLED=0 go build ./...   # pure Go
@@ -39,6 +34,10 @@ go test ./...
 ```
 
 Go services pin `go 1.21` and echo v4.12 — **do not run `go mod tidy`**.
+
+To work on NimoOS-Common and this service at the same time, put a `go.work` in
+the directory containing both checkouts rather than adding a `replace` to
+`go.mod` — that keeps a local path out of the shared module file.
 
 
 ## Documentation
