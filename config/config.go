@@ -57,7 +57,12 @@ func defaults() Config {
 	return Config{
 		BindHost:             "127.0.0.1",
 		RerankerEnabled:      true,
-		RerankerCandidates:   40,
+		// 8, not 40: the reranker is CPU-bound on most NimoOS boxes (~1.3s per
+		// candidate for real chunks), and 40 candidates blew past ParserTimeoutSec
+		// so every rerank was abandoned - the query then reported
+		// rerank_unavailable and, before the parser threadpool fix, dragged the
+		// following path expansion down with it.
+		RerankerCandidates:   8,
 		DefaultTopK:          20,
 		MaxTopK:              100,
 		EmbedCacheSize:       1000,

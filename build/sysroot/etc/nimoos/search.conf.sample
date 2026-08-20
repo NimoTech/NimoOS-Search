@@ -6,7 +6,7 @@ LogPath     = /var/log/nimoos
 [search]
 BindHost              = 127.0.0.1
 RerankerEnabled       = true
-RerankerCandidates    = 40
+RerankerCandidates    = 8
 DefaultTopK           = 20
 MaxTopK               = 100
 EmbedCacheSize        = 1000
