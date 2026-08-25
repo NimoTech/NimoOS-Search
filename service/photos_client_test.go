@@ -43,3 +43,31 @@ func TestPhotosClient_SmartSearch_ErrorPropagates(t *testing.T) {
 	_, err := c.SmartSearch(context.Background(), "x", 5, "")
 	require.Error(t, err)
 }
+
+func TestPhotosClient_GetAsset_MapsFieldsAndForwardsUser(t *testing.T) {
+	var gotPath, gotUser string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotUser = r.URL.Path, r.Header.Get("X-NimoOS-User-ID")
+		w.Write([]byte(`{"id":"a1","filePath":"/media/RAID_raid10/Image/x.mp4","mimeType":"video/mp4","originalName":"x.mp4","takenAt":"2026-07-21T10:00:00Z","durationMs":754000}`))
+	}))
+	defer srv.Close()
+	c := NewPhotosClient(NewBaseURLSource("", srv.URL), 5)
+	a, err := c.GetAsset(context.Background(), "a1", "7")
+	require.NoError(t, err)
+	require.Equal(t, "/v1/photos/assets/a1", gotPath)
+	require.Equal(t, "7", gotUser)
+	require.Equal(t, "/media/RAID_raid10/Image/x.mp4", a.FilePath)
+	require.Equal(t, "video/mp4", a.MimeType)
+	require.NotNil(t, a.TakenAt)
+	require.Equal(t, int64(754000), a.DurationMs)
+}
+
+func TestPhotosClient_GetAsset_404IsErrPhotoNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	c := NewPhotosClient(NewBaseURLSource("", srv.URL), 5)
+	_, err := c.GetAsset(context.Background(), "gone", "")
+	require.ErrorIs(t, err, ErrPhotoNotFound)
+}

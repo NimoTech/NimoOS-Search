@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,6 +19,9 @@ type SearchRequest struct {
 	// "top K files", each carrying up to MaxChunksPerFile chunks (best first).
 	GroupByFile      bool `json:"group_by_file,omitempty"`
 	MaxChunksPerFile int  `json:"max_chunks_per_file,omitempty"`
+	// UserID is the caller (from X-NimoOS-User-ID), forwarded to Photos when
+	// resolving photos:<asset_id> hits. Not part of the request body.
+	UserID string `json:"-"`
 }
 
 // FileGroup is one file-level result produced when GroupByFile is set.
@@ -89,8 +95,11 @@ type QdrantAPI interface {
 }
 
 type SearchService struct {
-	Parser             ParserAPI
-	Qdrant             QdrantAPI
+	Parser ParserAPI
+	Qdrant QdrantAPI
+	// Photos resolves photos:<asset_id> hits to a file path (see
+	// expandPhotoPaths). nil disables the lookup; such hits keep paths=null.
+	Photos             PhotoAssetLookup
 	Cache              *EmbedCache
 	ParserVersion      string
 	DefaultTopK        int
@@ -256,35 +265,65 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 		hits = hits[:topK]
 	}
 
-	// 5. Expand paths via Parser
+	// 5. Expand paths: documents via Parser, album assets via Photos.
+	//    photos:<asset_id> ids are caption vectors Parser has never heard of
+	//    (ExpandFiles would only list them as missing), so they are split off
+	//    and resolved against Photos instead — same paths[0] slot, so every
+	//    consumer (UI, agent tool, MCP) sees a real file name either way.
 	t = time.Now()
 	if len(hits) > 0 {
 		idSet := make(map[string]struct{})
-		ids := []string{}
+		docIDs := []string{}
+		photoIDs := []string{}
 		for _, h := range hits {
-			if _, ok := idSet[h.FileID]; !ok {
-				idSet[h.FileID] = struct{}{}
-				ids = append(ids, h.FileID)
+			if _, ok := idSet[h.FileID]; ok {
+				continue
+			}
+			idSet[h.FileID] = struct{}{}
+			if strings.HasPrefix(h.FileID, photoFileIDPrefix) {
+				photoIDs = append(photoIDs, h.FileID)
+			} else {
+				docIDs = append(docIDs, h.FileID)
 			}
 		}
-		exp, err := s.Parser.ExpandFiles(ctx, ids)
-		stats.ExpandMs = int(time.Since(t).Milliseconds())
-		if err != nil {
-			warnings = append(warnings, "path_expand_unavailable")
-		} else {
-			byID := make(map[string]FileRecord, len(exp.Files))
-			for _, f := range exp.Files {
-				byID[f.FileID] = f
-			}
-			for i := range hits {
-				if rec, ok := byID[hits[i].FileID]; ok {
-					hits[i].Paths = rec.Paths
-					if hits[i].Mime == "" {
-						hits[i].Mime = rec.Mime
+		if len(docIDs) > 0 {
+			exp, err := s.Parser.ExpandFiles(ctx, docIDs)
+			if err != nil {
+				warnings = append(warnings, "path_expand_unavailable")
+			} else {
+				byID := make(map[string]FileRecord, len(exp.Files))
+				for _, f := range exp.Files {
+					byID[f.FileID] = f
+				}
+				for i := range hits {
+					if rec, ok := byID[hits[i].FileID]; ok {
+						hits[i].Paths = rec.Paths
+						if hits[i].Mime == "" {
+							hits[i].Mime = rec.Mime
+						}
 					}
 				}
 			}
 		}
+		if len(photoIDs) > 0 && s.Photos != nil {
+			assets, failed := s.expandPhotoPaths(ctx, photoIDs, req.UserID)
+			if failed {
+				warnings = append(warnings, "photo_expand_unavailable")
+			}
+			for i := range hits {
+				if a, ok := assets[hits[i].FileID]; ok {
+					var mtime int64
+					if a.TakenAt != nil {
+						mtime = a.TakenAt.UnixMilli()
+					}
+					hits[i].Paths = []FilePath{{RootID: photoRootID, Path: a.FilePath, MtimeMs: mtime}}
+					if hits[i].Mime == "" {
+						hits[i].Mime = a.MimeType
+					}
+				}
+			}
+		}
+		stats.ExpandMs = int(time.Since(t).Milliseconds())
 	}
 
 	// 6. When grouping, assemble file-level results from the path-expanded hits.
@@ -316,6 +355,60 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	// Hits is always populated (even on the grouped path) for backward compatibility;
 	// consumers should prefer Files when present (len > 0).
 	return &SearchResponse{Hits: hits, Files: files, Stats: stats, Warnings: warnings}, nil
+}
+
+// photoFileIDPrefix marks caption vectors written by the Photos→Parser
+// pipeline: file_id = "photos:<asset_id>" (NimoOS-Parser write-side
+// convention, see also AuthzService.PhotoCaption). photoRootID is the virtual
+// root core seeds for them in o_root_grants and the root_ids they carry.
+const (
+	photoFileIDPrefix = "photos:"
+	photoRootID       = "photos"
+)
+
+// photoLookupTimeout bounds each per-asset Photos call. Path expansion is
+// cosmetic (a name for the card), so a slow Photos must not hold the search.
+const photoLookupTimeout = 2 * time.Second
+
+// photoLookupConcurrency caps in-flight GetAsset calls per search.
+const photoLookupConcurrency = 4
+
+// expandPhotoPaths resolves photos:<asset_id> file ids to their assets,
+// concurrently and fail-open. The returned map is keyed by the full file id.
+// failed is true when at least one lookup failed for a reason other than
+// "asset gone" (ErrPhotoNotFound) — that is the caller's cue to warn once
+// about Photos being unavailable; a deleted asset is just a miss.
+func (s *SearchService) expandPhotoPaths(ctx context.Context, fileIDs []string, userID string) (map[string]*PhotoAsset, bool) {
+	var (
+		mu     sync.Mutex
+		out    = make(map[string]*PhotoAsset, len(fileIDs))
+		failed bool
+		wg     sync.WaitGroup
+		sem    = make(chan struct{}, photoLookupConcurrency)
+	)
+	for _, fid := range fileIDs {
+		wg.Add(1)
+		go func(fid string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			cctx, cancel := context.WithTimeout(ctx, photoLookupTimeout)
+			defer cancel()
+			a, err := s.Photos.GetAsset(cctx, strings.TrimPrefix(fid, photoFileIDPrefix), userID)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				out[fid] = a
+			case errors.Is(err, ErrPhotoNotFound):
+				// gone from the library; keep paths=null silently
+			default:
+				failed = true
+			}
+		}(fid)
+	}
+	wg.Wait()
+	return out, failed
 }
 
 // buildHitFromPayload turns a Qdrant hit into a Search Hit with sensible
