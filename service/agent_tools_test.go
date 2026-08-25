@@ -105,3 +105,7 @@ func TestAgentToolsSchema_IncludesReadDocument(t *testing.T) {
 	}
 	require.True(t, names["read_document"])
 }
+
+func (f fakeQdrantA) DistinctValues(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}

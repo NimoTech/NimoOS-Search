@@ -1,8 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	pb "github.com/qdrant/go-client/qdrant"
 	"google.golang.org/grpc"
@@ -12,23 +19,77 @@ import (
 type QdrantClient struct {
 	conn   *grpc.ClientConn
 	points pb.PointsClient
+	// httpBase is Qdrant's REST endpoint (e.g. http://127.0.0.1:6333). Only
+	// the facet API goes over REST: the pinned go-client (v1.10) predates
+	// gRPC Facet, and bumping it would drag the module past the go 1.21 pin.
+	httpBase string
+	hc       *http.Client
 }
 
-func NewQdrantClient(host string, grpcPort int) (*QdrantClient, error) {
+func NewQdrantClient(host string, grpcPort int, httpBase string) (*QdrantClient, error) {
 	addr := fmt.Sprintf("%s:%d", host, grpcPort)
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
-	return &QdrantClient{conn: conn, points: pb.NewPointsClient(conn)}, nil
+	return &QdrantClient{
+		conn: conn, points: pb.NewPointsClient(conn),
+		httpBase: strings.TrimRight(httpBase, "/"),
+		hc:       &http.Client{Timeout: 5 * time.Second},
+	}, nil
+}
+
+// DistinctValues lists the distinct values of a keyword payload field via
+// Qdrant's facet API (REST: POST /collections/{name}/facet, Qdrant >= 1.12).
+// exact=true asks for precise counts; we only use the values.
+func (c *QdrantClient) DistinctValues(ctx context.Context, collection, key string) ([]string, error) {
+	if c.httpBase == "" {
+		return nil, errors.New("qdrant: no REST base url configured")
+	}
+	body, _ := json.Marshal(map[string]any{"key": key, "limit": 1000, "exact": true})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.httpBase+"/collections/"+url.PathEscape(collection)+"/facet", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("qdrant facet %s/%s: status %d", collection, key, resp.StatusCode)
+	}
+	var out struct {
+		Result struct {
+			Hits []struct {
+				Value any `json:"value"`
+			} `json:"hits"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	vals := make([]string, 0, len(out.Result.Hits))
+	for _, h := range out.Result.Hits {
+		if s, ok := h.Value.(string); ok {
+			vals = append(vals, s)
+		}
+	}
+	return vals, nil
 }
 
 func (c *QdrantClient) Close() error { return c.conn.Close() }
 
 type QdrantFilter struct {
-	RootIDsAny   []string
-	FileIDsAny   []string
-	MimePrefix   []string
+	RootIDsAny []string
+	FileIDsAny []string
+	// MimeIn is a set of EXACT mime values. The public filter is called
+	// mime_prefix, but Qdrant's keyword index cannot prefix-match, so
+	// SearchService expands any prefix into the exact values present in the
+	// collection (see mime_prefix.go) before it reaches this struct.
+	MimeIn       []string
 	KindIn       []string
 	LangIn       []string
 	MtimeAfterMs int64
@@ -148,11 +209,8 @@ func buildPBFilter(f *QdrantFilter) *pb.Filter {
 	if len(f.LangIn) > 0 {
 		must = append(must, matchKeywordAny("lang", f.LangIn))
 	}
-	// mime_prefix is handled differently: Qdrant doesn't have prefix match,
-	// so we expand to MatchText. MVP: pass as Any() over the full mime since
-	// our chunks use exact mime ("text/markdown", etc.)
-	if len(f.MimePrefix) > 0 {
-		must = append(must, matchKeywordAny("mime", f.MimePrefix))
+	if len(f.MimeIn) > 0 {
+		must = append(must, matchKeywordAny("mime", f.MimeIn))
 	}
 	if f.MtimeAfterMs > 0 {
 		gte := float64(f.MtimeAfterMs)

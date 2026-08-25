@@ -137,7 +137,17 @@ components:
       type: object
       properties:
         root_ids: { type: array, items: { type: string } }
-        mime_prefix: { type: array, items: { type: string } }
+        mime_prefix:
+          type: array
+          items: { type: string }
+          description: >-
+            Mime filter. An entry ending in "/" is a prefix and selects every mime
+            currently present in the index that starts with it (e.g. "text/",
+            "text/markdown+docling/"). Any other entry is an exact mime, so
+            "text/markdown" does NOT also select "text/markdown+docling/pdf".
+            An empty match set yields zero hits. If the mime facet is
+            unavailable the raw list is applied as exact values and the
+            response carries the warning "mime_facet_unavailable".
         kind_in: { type: array, items: { type: string } }
         lang_in: { type: array, items: { type: string } }
     SearchRequest:

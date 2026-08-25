@@ -32,10 +32,30 @@ func (f *fakeParser) ExpandFiles(ctx context.Context, ids []string) (*ExpandFile
 	return &ExpandFilesResult{Files: f.expandFiles}, nil
 }
 
-type fakeQdrant struct{ hits []QdrantHit }
+type fakeQdrant struct {
+	hits []QdrantHit
+	// distinct is what DistinctValues returns (the facet over payload.mime);
+	// distinctErr makes the facet fail; distinctCalls counts facet round-trips
+	// so the TTL cache can be asserted.
+	distinct      []string
+	distinctErr   error
+	distinctCalls int
+	searchCalls   int
+	lastReq       *QdrantSearchRequest
+}
 
 func (f *fakeQdrant) SearchTextHybrid(ctx context.Context, r QdrantSearchRequest) ([]QdrantHit, error) {
+	f.searchCalls++
+	rr := r
+	f.lastReq = &rr
 	return f.hits, nil
+}
+func (f *fakeQdrant) DistinctValues(ctx context.Context, collection, key string) ([]string, error) {
+	f.distinctCalls++
+	if f.distinctErr != nil {
+		return nil, f.distinctErr
+	}
+	return f.distinct, nil
 }
 func (f *fakeQdrant) ScrollByFileID(ctx context.Context, c, fid string, roots []string, lim int, off string) ([]QdrantHit, string, error) {
 	return nil, "", nil
@@ -98,7 +118,9 @@ func TestSearchText_EmbedderDownReturns503(t *testing.T) {
 
 type errParser struct{ err error }
 
-func (e *errParser) Embed(ctx context.Context, m, t, x, b string) (*EmbedResult, error) { return nil, e.err }
+func (e *errParser) Embed(ctx context.Context, m, t, x, b string) (*EmbedResult, error) {
+	return nil, e.err
+}
 func (e *errParser) Rerank(ctx context.Context, q string, c []RerankCandidate, k *int) (*RerankResult, error) {
 	return nil, errors.New("not called")
 }
@@ -182,4 +204,95 @@ func TestSearchText_NoGroupingKeepsFlatHits(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resp.Hits, 2)
 	require.Nil(t, resp.Files)
+}
+
+// --- mime_prefix semantics -------------------------------------------------
+//
+// Qdrant's keyword index has no prefix match, so the service expands each
+// prefix (an entry ending in "/") into the set of exact mime values currently
+// present in the collection (facet over payload.mime). Entries without a
+// trailing slash are exact mimes and pass through untouched — that keeps the
+// UI's per-type checkboxes ("text/markdown" must NOT also select
+// "text/markdown+docling/pdf") byte-for-byte unchanged.
+
+func knownMimes() []string {
+	return []string{"video/mp4", "text/markdown", "text/markdown+docling/pdf", "image/png", "text/plain"}
+}
+
+func TestSearchText_MimePrefixWithTrailingSlashExpandsToKnownMimes(t *testing.T) {
+	q := &fakeQdrant{distinct: knownMimes()}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: q, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	_, err := svc.SearchText(context.Background(), SearchRequest{
+		Query: "x", Filters: &Filters{MimePrefix: []string{"text/"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, q.lastReq)
+	require.Equal(t, []string{"text/markdown", "text/markdown+docling/pdf", "text/plain"}, q.lastReq.Filter.MimeIn)
+}
+
+func TestSearchText_ExactMimeIsNotTreatedAsPrefix(t *testing.T) {
+	q := &fakeQdrant{distinct: knownMimes()}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: q, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	_, err := svc.SearchText(context.Background(), SearchRequest{
+		Query: "x", Filters: &Filters{MimePrefix: []string{"text/markdown", "application/pdf"}},
+	})
+	require.NoError(t, err)
+	// "text/markdown" must not swallow "text/markdown+docling/pdf"; an exact
+	// value the collection has never seen is still forwarded (harmless: it
+	// just matches nothing on the Qdrant side).
+	require.Equal(t, []string{"text/markdown", "application/pdf"}, q.lastReq.Filter.MimeIn)
+	require.Equal(t, 0, q.distinctCalls, "exact-only filters must not pay for a facet round-trip")
+}
+
+func TestSearchText_MixedPrefixAndExactDedupes(t *testing.T) {
+	q := &fakeQdrant{distinct: knownMimes()}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: q, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	_, err := svc.SearchText(context.Background(), SearchRequest{
+		Query: "x", Filters: &Filters{MimePrefix: []string{"text/plain", "text/"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"text/plain", "text/markdown", "text/markdown+docling/pdf"}, q.lastReq.Filter.MimeIn)
+}
+
+func TestSearchText_MimePrefixWithNoKnownMatchShortCircuits(t *testing.T) {
+	q := &fakeQdrant{distinct: knownMimes(), hits: []QdrantHit{{PointID: "p1", Score: 0.9, Payload: map[string]any{"file_id": "f1"}}}}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: q, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	resp, err := svc.SearchText(context.Background(), SearchRequest{
+		Query: "x", Filters: &Filters{MimePrefix: []string{"application/"}}, GroupByFile: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Hits, "hits must serialise as [] not null")
+	require.Empty(t, resp.Hits)
+	require.Empty(t, resp.Files)
+	require.Equal(t, 0, q.searchCalls, "an empty mime set can match nothing — skip the vector search")
+}
+
+func TestSearchText_MimeFacetUnavailableFallsBackToExactMatch(t *testing.T) {
+	q := &fakeQdrant{distinctErr: errors.New("facet down")}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: q, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	resp, err := svc.SearchText(context.Background(), SearchRequest{
+		Query: "x", Filters: &Filters{MimePrefix: []string{"text/", "text/plain"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"text/", "text/plain"}, q.lastReq.Filter.MimeIn, "degrade to the pre-facet behaviour, never fail the search")
+	require.Contains(t, resp.Warnings, "mime_facet_unavailable")
+}
+
+func TestSearchText_KnownMimesAreCachedAcrossSearches(t *testing.T) {
+	q := &fakeQdrant{distinct: knownMimes()}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: q, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	for i := 0; i < 3; i++ {
+		_, err := svc.SearchText(context.Background(), SearchRequest{Query: "x", Filters: &Filters{MimePrefix: []string{"text/"}}})
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, q.distinctCalls)
+}
+
+func TestSearchText_NoMimeFilterNeverFacets(t *testing.T) {
+	q := &fakeQdrant{distinct: knownMimes()}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: q, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	_, err := svc.SearchText(context.Background(), SearchRequest{Query: "x"})
+	require.NoError(t, err)
+	require.Equal(t, 0, q.distinctCalls)
+	require.Nil(t, q.lastReq.Filter.MimeIn)
 }

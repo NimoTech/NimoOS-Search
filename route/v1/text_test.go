@@ -134,6 +134,9 @@ func (f *fakeQdrantSvc) ScrollByFileID(ctx context.Context, c, fid string, roots
 	return nil, "", nil
 }
 func (f *fakeQdrantSvc) Count(ctx context.Context, c string) (uint64, error) { return 0, nil }
+func (f *fakeQdrantSvc) DistinctValues(ctx context.Context, c, k string) ([]string, error) {
+	return nil, nil
+}
 
 // capturingQdrantSvc records the incoming root filter condition, used to
 // assert that ApplyScope's result actually made it into the Qdrant query
@@ -153,3 +156,6 @@ func (f *capturingQdrantSvc) ScrollByFileID(ctx context.Context, c, fid string, 
 	return nil, "", nil
 }
 func (f *capturingQdrantSvc) Count(ctx context.Context, c string) (uint64, error) { return 0, nil }
+func (f *capturingQdrantSvc) DistinctValues(ctx context.Context, c, k string) ([]string, error) {
+	return nil, nil
+}

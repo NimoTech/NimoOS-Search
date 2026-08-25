@@ -38,7 +38,7 @@ func TestE2E_TextSearchHappyPath(t *testing.T) {
 	nimoos := stubNimoOSE2E{roots: []string{"r1"}}
 
 	// 3. Real Qdrant — Search service against real cluster
-	q, err := service.NewQdrantClient("127.0.0.1", 6334)
+	q, err := service.NewQdrantClient("127.0.0.1", 6334, "http://127.0.0.1:6333")
 	require.NoError(t, err)
 	defer q.Close()
 
