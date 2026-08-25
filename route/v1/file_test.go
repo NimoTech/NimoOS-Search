@@ -60,7 +60,8 @@ func (emptyQdrant) SearchTextHybrid(context.Context, service.QdrantSearchRequest
 func (emptyQdrant) ScrollByFileID(context.Context, string, string, []string, int, string) ([]service.QdrantHit, string, error) {
 	return nil, "", nil
 }
-func (emptyQdrant) Count(context.Context, string) (uint64, error) { return 0, nil }
+func (emptyQdrant) Count(context.Context, string) (uint64, error)                    { return 0, nil }
+func (emptyQdrant) DistinctValues(context.Context, string, string) ([]string, error) { return nil, nil }
 
 type chunkScrollQdrant struct{ hits []service.QdrantHit }
 
@@ -71,3 +72,7 @@ func (c *chunkScrollQdrant) ScrollByFileID(context.Context, string, string, []st
 	return c.hits, "", nil
 }
 func (c *chunkScrollQdrant) Count(context.Context, string) (uint64, error) { return 0, nil }
+
+func (c *chunkScrollQdrant) DistinctValues(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}

@@ -69,6 +69,9 @@ func (r *recordingQdrant) ScrollByFileID(ctx context.Context, c, fid string, roo
 	return r.hits, "", nil
 }
 func (r *recordingQdrant) Count(ctx context.Context, c string) (uint64, error) { return 0, nil }
+func (r *recordingQdrant) DistinctValues(ctx context.Context, c, k string) ([]string, error) {
+	return nil, nil
+}
 
 func TestGetDocumentText_StitchesBodyChunksWithPageMarkers(t *testing.T) {
 	q := &recordingQdrant{hits: []QdrantHit{

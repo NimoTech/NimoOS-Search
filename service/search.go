@@ -83,6 +83,9 @@ type QdrantAPI interface {
 	SearchTextHybrid(ctx context.Context, r QdrantSearchRequest) ([]QdrantHit, error)
 	ScrollByFileID(ctx context.Context, collection, fileID string, allowedRoots []string, limit int, offset string) ([]QdrantHit, string, error)
 	Count(ctx context.Context, collection string) (uint64, error)
+	// DistinctValues lists every distinct value of a keyword payload field
+	// (Qdrant facet). Used to expand mime_prefix into exact mimes.
+	DistinctValues(ctx context.Context, collection, key string) ([]string, error)
 }
 
 type SearchService struct {
@@ -92,6 +95,10 @@ type SearchService struct {
 	ParserVersion      string
 	DefaultTopK        int
 	RerankerCandidates int
+
+	// mimeCache memoises the facet over payload.mime that mime_prefix
+	// expansion needs; see knownMimes.
+	mimeCache mimeFacetCache
 }
 
 // SearchText is the full /v1/search/text orchestration:
@@ -135,6 +142,25 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	warnings := []string{}
 	stats := SearchStats{}
 
+	// 0. Resolve mime_prefix into exact mime values (Qdrant has no prefix
+	//    match). Prefixes are entries ending in "/"; exact mimes pass through.
+	//    A prefix that matches nothing in the collection can't produce hits,
+	//    so short-circuit before paying for the embedding + vector search.
+	mimeIn := req.Filters.MimePrefix
+	if hasMimePrefixEntries(mimeIn) {
+		known, err := s.knownMimes(ctx)
+		if err != nil {
+			// Degrade to the pre-facet behaviour (exact match on the raw
+			// list) rather than failing the whole search.
+			warnings = append(warnings, "mime_facet_unavailable")
+		} else {
+			mimeIn = expandMimePrefixes(mimeIn, known)
+			if len(mimeIn) == 0 {
+				return &SearchResponse{Hits: []Hit{}, Stats: stats, Warnings: warnings}, nil
+			}
+		}
+	}
+
 	// 1. Embed (with cache + singleflight)
 	t := time.Now()
 	emb, err := s.Cache.GetOrLoad(ctx, HashQuery(req.Query),
@@ -154,7 +180,7 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 		Sparse:     emb.Sparse,
 		Filter: &QdrantFilter{
 			RootIDsAny:   req.Filters.RootIDs,
-			MimePrefix:   req.Filters.MimePrefix,
+			MimeIn:       mimeIn,
 			KindIn:       req.Filters.KindIn,
 			LangIn:       req.Filters.LangIn,
 			MtimeAfterMs: req.Filters.MtimeAfterMs,

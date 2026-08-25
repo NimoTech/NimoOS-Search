@@ -119,7 +119,7 @@ func newQdrantClient(cfg config.Config, lc fx.Lifecycle) (*service.QdrantClient,
 	if u, err := parseHostFromURL(cfg.QdrantURL); err == nil && u != "" {
 		host = u
 	}
-	c, err := service.NewQdrantClient(host, cfg.QdrantGRPCPort)
+	c, err := service.NewQdrantClient(host, cfg.QdrantGRPCPort, cfg.QdrantURL)
 	if err != nil {
 		return nil, err
 	}

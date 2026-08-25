@@ -251,3 +251,7 @@ func TestAggregate_ImagesCaptionTruncated(t *testing.T) {
 	require.LessOrEqual(t, len(runes), 201)
 	require.True(t, strings.HasSuffix(caption, "…"))
 }
+
+func (c *capturingQdrant) DistinctValues(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
