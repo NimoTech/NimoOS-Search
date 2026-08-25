@@ -49,6 +49,7 @@ func postSearchText(d *Deps) echo.HandlerFunc {
 		resp, err := d.Search.SearchText(c.Request().Context(), service.SearchRequest{
 			Query: body.Query, Filters: filters, TopK: body.TopK, Rerank: rerank,
 			GroupByFile: body.GroupByFile, MaxChunksPerFile: body.MaxChunksPerFile,
+			UserID: uid,
 		})
 		if err != nil {
 			switch {

@@ -15,6 +15,7 @@ type fakeParser struct {
 	rerankErr    error
 	rerankScores []RerankScore
 	expandFiles  []FileRecord
+	expandIDs    []string // file ids the last ExpandFiles was asked about
 }
 
 func (f *fakeParser) Embed(ctx context.Context, model, t, text, b64 string) (*EmbedResult, error) {
@@ -29,7 +30,30 @@ func (f *fakeParser) Rerank(ctx context.Context, q string, c []RerankCandidate, 
 	return &RerankResult{Scores: f.rerankScores, ModelVersion: "bge-reranker-v2-m3/v1"}, nil
 }
 func (f *fakeParser) ExpandFiles(ctx context.Context, ids []string) (*ExpandFilesResult, error) {
+	f.expandIDs = ids
 	return &ExpandFilesResult{Files: f.expandFiles}, nil
+}
+
+// fakePhotos stubs the Photos asset lookup used to give photos:<id> hits a
+// path. assets is keyed by asset id (without the photos: prefix).
+type fakePhotos struct {
+	assets  map[string]*PhotoAsset
+	err     error
+	calls   []string
+	userIDs []string
+}
+
+func (f *fakePhotos) GetAsset(ctx context.Context, assetID, userID string) (*PhotoAsset, error) {
+	f.calls = append(f.calls, assetID)
+	f.userIDs = append(f.userIDs, userID)
+	if f.err != nil {
+		return nil, f.err
+	}
+	a, ok := f.assets[assetID]
+	if !ok {
+		return nil, ErrPhotoNotFound
+	}
+	return a, nil
 }
 
 type fakeQdrant struct {
@@ -295,4 +319,102 @@ func TestSearchText_NoMimeFilterNeverFacets(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, q.distinctCalls)
 	require.Nil(t, q.lastReq.Filter.MimeIn)
+}
+
+// --- photos:<asset_id> path expansion -------------------------------------
+//
+// Caption vectors live in text_chunks with file_id "photos:<asset_id>".
+// Parser's ExpandFiles has never heard of them, so they used to come back
+// with paths=null and the UI could only label them "Photo"/"Video". The
+// service now asks Photos for the asset and fills the same paths[0] slot.
+
+func photoHits() []QdrantHit {
+	return []QdrantHit{
+		{PointID: "p1", Score: 0.9, Payload: map[string]any{"file_id": "photos:a1", "kind": "caption", "mime": "video/mp4", "chunk_no": int64(0), "text": "a lecture"}},
+		{PointID: "p2", Score: 0.8, Payload: map[string]any{"file_id": "f1", "kind": "body", "mime": "text/markdown", "chunk_no": int64(0), "text": "doc"}},
+		{PointID: "p3", Score: 0.7, Payload: map[string]any{"file_id": "photos:a2", "kind": "caption", "chunk_no": int64(0), "text": "a cat"}},
+	}
+}
+
+func TestSearchText_PhotoHitsGetPathsFromPhotos(t *testing.T) {
+	taken := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
+	ph := &fakePhotos{assets: map[string]*PhotoAsset{
+		"a1": {ID: "a1", FilePath: "/media/RAID_raid10/知识库/肝疾病1.mp4", MimeType: "video/mp4", TakenAt: &taken},
+		"a2": {ID: "a2", FilePath: "/DATA/Gallery/cat.jpg", MimeType: "image/jpeg"},
+	}}
+	parser := &fakeParser{expandFiles: []FileRecord{{FileID: "f1", Paths: []FilePath{{RootID: "r1", Path: "/DATA/doc.md", MtimeMs: 5}}}}}
+	svc := &SearchService{Parser: parser, Qdrant: &fakeQdrant{hits: photoHits()}, Photos: ph, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+
+	resp, err := svc.SearchText(context.Background(), SearchRequest{Query: "x", GroupByFile: true, UserID: "7"})
+	require.NoError(t, err)
+	require.Empty(t, resp.Warnings)
+
+	byID := map[string]FileGroup{}
+	for _, f := range resp.Files {
+		byID[f.FileID] = f
+	}
+	require.Equal(t, []FilePath{{RootID: "photos", Path: "/media/RAID_raid10/知识库/肝疾病1.mp4", MtimeMs: taken.UnixMilli()}}, byID["photos:a1"].Paths)
+	require.Equal(t, "video/mp4", byID["photos:a1"].Mime)
+	// a2's chunk carried no mime: Photos' mimeType fills the gap, and an asset
+	// without taken_at gets mtime 0 rather than a made-up date.
+	require.Equal(t, []FilePath{{RootID: "photos", Path: "/DATA/Gallery/cat.jpg", MtimeMs: 0}}, byID["photos:a2"].Paths)
+	require.Equal(t, "image/jpeg", byID["photos:a2"].Mime)
+	// The document still goes through Parser; Parser is never asked about
+	// photos ids (it would only report them missing).
+	require.Equal(t, []FilePath{{RootID: "r1", Path: "/DATA/doc.md", MtimeMs: 5}}, byID["f1"].Paths)
+	require.Equal(t, []string{"f1"}, parser.expandIDs)
+	// The flat hits carry the same paths (consumers without group_by_file).
+	for _, h := range resp.Hits {
+		if h.FileID == "photos:a1" {
+			require.Equal(t, "/media/RAID_raid10/知识库/肝疾病1.mp4", h.Paths[0].Path)
+		}
+	}
+	// Photos is asked per asset with the caller's user id (Photos scopes
+	// GetAsset by user), the prefix stripped.
+	require.ElementsMatch(t, []string{"a1", "a2"}, ph.calls)
+	require.Equal(t, []string{"7", "7"}, ph.userIDs)
+	// Score order is untouched by the concurrent lookups.
+	require.Equal(t, []string{"photos:a1", "f1", "photos:a2"}, []string{resp.Files[0].FileID, resp.Files[1].FileID, resp.Files[2].FileID})
+}
+
+func TestSearchText_PhotosUnavailableIsFailOpen(t *testing.T) {
+	ph := &fakePhotos{err: errors.New("photos down")}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: &fakeQdrant{hits: photoHits()}, Photos: ph, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	resp, err := svc.SearchText(context.Background(), SearchRequest{Query: "x", GroupByFile: true})
+	require.NoError(t, err)
+	require.Len(t, resp.Files, 3, "hits are never dropped because a path lookup failed")
+	require.Nil(t, resp.Files[0].Paths)
+	require.Contains(t, resp.Warnings, "photo_expand_unavailable")
+	require.Equal(t, 1, countOf(resp.Warnings, "photo_expand_unavailable"), "one warning, not one per asset")
+}
+
+func TestSearchText_PhotoNotFoundIsNotAWarning(t *testing.T) {
+	// An asset deleted from the library after its caption was indexed is a
+	// per-asset miss, not a Photos outage: no warning, the hit just keeps
+	// paths=null like before.
+	ph := &fakePhotos{assets: map[string]*PhotoAsset{"a1": {ID: "a1", FilePath: "/x.mp4", MimeType: "video/mp4"}}}
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: &fakeQdrant{hits: photoHits()}, Photos: ph, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	resp, err := svc.SearchText(context.Background(), SearchRequest{Query: "x", GroupByFile: true})
+	require.NoError(t, err)
+	require.Empty(t, resp.Warnings)
+	require.Equal(t, "/x.mp4", resp.Files[0].Paths[0].Path)
+	require.Nil(t, resp.Files[2].Paths)
+}
+
+func TestSearchText_NoPhotosClientSkipsLookup(t *testing.T) {
+	svc := &SearchService{Parser: &fakeParser{}, Qdrant: &fakeQdrant{hits: photoHits()}, Cache: NewEmbedCache(10, time.Minute), DefaultTopK: 10}
+	resp, err := svc.SearchText(context.Background(), SearchRequest{Query: "x", GroupByFile: true})
+	require.NoError(t, err)
+	require.Empty(t, resp.Warnings)
+	require.Nil(t, resp.Files[0].Paths)
+}
+
+func countOf(xs []string, v string) int {
+	n := 0
+	for _, x := range xs {
+		if x == v {
+			n++
+		}
+	}
+	return n
 }

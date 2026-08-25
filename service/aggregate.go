@@ -109,7 +109,7 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 				semWarn = warn
 				return nil
 			}
-			r, err := a.Search.SearchText(ctx, SearchRequest{Query: req.Query, Filters: scoped, TopK: st.SemanticTopK, Rerank: true})
+			r, err := a.Search.SearchText(ctx, SearchRequest{Query: req.Query, Filters: scoped, TopK: st.SemanticTopK, Rerank: true, UserID: req.UserID})
 			if err != nil {
 				semWarn = "semantic_unavailable"
 				return nil

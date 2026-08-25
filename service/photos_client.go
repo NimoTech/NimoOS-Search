@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -85,4 +87,56 @@ func (c *PhotosClient) SmartSearch(ctx context.Context, query string, topK int, 
 		})
 	}
 	return hits, nil
+}
+
+// PhotoAsset is the subset of NimoOS-Photos' GET /v1/photos/assets/{id}
+// response the search service needs to give a photos:<asset_id> hit a path.
+type PhotoAsset struct {
+	ID           string     `json:"id"`
+	FilePath     string     `json:"filePath"`
+	MimeType     string     `json:"mimeType"`
+	OriginalName string     `json:"originalName"`
+	TakenAt      *time.Time `json:"takenAt,omitempty"`
+	DurationMs   int64      `json:"durationMs,omitempty"`
+}
+
+// ErrPhotoNotFound is returned by GetAsset for a 404: the asset was removed
+// from the library after its caption was indexed. Callers treat it as a
+// per-asset miss, not as Photos being unavailable.
+var ErrPhotoNotFound = errors.New("photo asset not found")
+
+// PhotoAssetLookup is the SearchService's minimal dependency on Photos (tests
+// use a fake). *PhotosClient satisfies it.
+type PhotoAssetLookup interface {
+	GetAsset(ctx context.Context, assetID, userID string) (*PhotoAsset, error)
+}
+
+// GetAsset fetches one asset's metadata from Photos (GET
+// /v1/photos/assets/{id}). Photos scopes the lookup by X-NimoOS-User-ID.
+func (c *PhotosClient) GetAsset(ctx context.Context, assetID, userID string) (*PhotoAsset, error) {
+	resp, err := doWithRediscover(c.http, c.src, func(base string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/photos/assets/"+url.PathEscape(assetID), nil)
+		if err != nil {
+			return nil, err
+		}
+		if userID != "" {
+			req.Header.Set("X-NimoOS-User-ID", userID)
+		}
+		return req, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrPhotoNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("photos asset %s returned %d", assetID, resp.StatusCode)
+	}
+	var a PhotoAsset
+	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
+		return nil, err
+	}
+	return &a, nil
 }
