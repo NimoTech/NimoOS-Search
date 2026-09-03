@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/NimoTech/NimoOS-Common/external"
 	"github.com/NimoTech/NimoOS-Common/middleware"
 	"github.com/NimoTech/NimoOS-Search/common"
 	"github.com/NimoTech/NimoOS-Search/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/NimoTech/NimoOS-Search/service/fileindex"
 	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/labstack/echo/v4"
+	echo_middleware "github.com/labstack/echo/v4/middleware"
 	"go.uber.org/fx"
 )
 
@@ -237,9 +239,14 @@ func newAgentTools(agg *service.Aggregator, a *service.AuthzService) *service.Ag
 	return &service.AgentTools{Agg: agg, Authz: a}
 }
 
-func newEcho() *echo.Echo {
+func newEcho(cfg config.Config) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
+	// External requests (proxied by the Gateway, RealIP = the client) must
+	// carry a valid UserService JWT; in-host callers are exempt and their
+	// X-NimoOS-User-ID header is trusted. Without this every /v1/search
+	// endpoint was reachable from the LAN with a forged user header.
+	e.Use(echo_middleware.JWTWithConfig(v1.JWTConfig(cfg.RuntimePath)))
 	e.Use(v1.InjectUserID)
 	return e
 }
@@ -268,8 +275,11 @@ func newEventBus(cfg config.Config, lc fx.Lifecycle) *service.EventBus {
 
 func registerRoutes(e *echo.Echo, s *service.SearchService, a *service.AuthzService,
 	n *service.NimoOSClient, t *service.AgentTools, p *service.PhotosClient,
-	sub *fileindex.Subsystem, st *service.SettingsStore) {
+	sub *fileindex.Subsystem, st *service.SettingsStore, cfg config.Config) {
 	deps := &v1.Deps{Search: s, Authz: a, NimoOS: n, Tools: t, Settings: st, FileIndex: sub}
+	deps.UserServiceURL = func() (string, error) {
+		return readDiscoveryURL(filepath.Join(cfg.RuntimePath, external.UserServiceAddressFilename), "")
+	}
 	if p != nil {
 		deps.Photos = p
 	}

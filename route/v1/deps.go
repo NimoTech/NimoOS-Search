@@ -16,6 +16,9 @@ type Deps struct {
 	Photos    service.ImageSearcher
 	Settings  *service.SettingsStore
 	FileIndex *fileindex.Subsystem
+	// UserServiceURL resolves the UserService base URL (from the runtime
+	// discovery file); AdminOnly uses it to check the caller's role.
+	UserServiceURL func() (string, error)
 }
 
 // RootAuthorizer narrows what routes need from NimoOSClient (testability).
