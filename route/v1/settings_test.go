@@ -23,7 +23,9 @@ func newSettingsDeps(t *testing.T) *Deps {
 		FileIndexEnabled: true, FileIndexRoots: []string{"/DATA"}, FileIndexScanIntervalH: 6,
 	})
 	require.NoError(t, err)
-	return &Deps{Settings: st, FileIndex: nil}
+	d := &Deps{Settings: st, FileIndex: nil}
+	withUserService(t, d, "admin") // writes are admin-gated; default to an admin caller
+	return d
 }
 
 func TestGetSettings(t *testing.T) {
@@ -39,10 +41,12 @@ func TestGetSettings(t *testing.T) {
 func TestPutSettings_AppliesAndRejectsEmptySources(t *testing.T) {
 	e := echo.New()
 	d := newSettingsDeps(t)
+	withUserService(t, d, "admin")
 	RegisterSettings(e, d)
 	// valid patch
 	req := httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(`{"semantic_top_k":9}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -50,6 +54,7 @@ func TestPutSettings_AppliesAndRejectsEmptySources(t *testing.T) {
 	// invalid: empty sources
 	req = httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(`{"default_sources":[]}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -73,6 +78,7 @@ func TestPutSettings_RestartRequiredOnlyForFileindexFields(t *testing.T) {
 	RegisterSettings(e, d)
 	// changing a restart field flags restart_required
 	req := httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(`{"fileindex_scan_interval_h":12}`))
+	req.Header.Set("Authorization", "Bearer tok")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -82,6 +88,7 @@ func TestPutSettings_RestartRequiredOnlyForFileindexFields(t *testing.T) {
 	require.Equal(t, true, body["restart_required"])
 	// a runtime-only change does NOT require restart
 	req = httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(`{"semantic_top_k":7}`))
+	req.Header.Set("Authorization", "Bearer tok")
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -94,6 +101,7 @@ func TestRescan_DisabledWhenNoIndex(t *testing.T) {
 	e := echo.New()
 	RegisterSettings(e, newSettingsDeps(t)) // FileIndex nil
 	req := httptest.NewRequest(http.MethodPost, "/v1/search/fileindex/rescan", nil)
+	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
@@ -107,6 +115,7 @@ func TestRescan_DisabledWhenEmptySubsystem(t *testing.T) {
 	d.FileIndex = &fileindex.Subsystem{}
 	RegisterSettings(e, d)
 	req := httptest.NewRequest(http.MethodPost, "/v1/search/fileindex/rescan", nil)
+	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
@@ -130,11 +139,13 @@ func TestPutSettings_RootsChangeHotReloadsNoRestart(t *testing.T) {
 	})
 	require.NoError(t, err)
 	d := &Deps{Settings: st, FileIndex: sub}
+	withUserService(t, d, "admin")
 
 	e := echo.New()
 	RegisterSettings(e, d)
 	body := `{"fileindex_roots":["` + dirB + `"]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -156,6 +167,7 @@ func TestPutSettings_EnabledChangeStillRestart(t *testing.T) {
 	e := echo.New()
 	RegisterSettings(e, d)
 	req := httptest.NewRequest(http.MethodPut, "/v1/search/settings", strings.NewReader(`{"fileindex_enabled":false}`))
+	req.Header.Set("Authorization", "Bearer tok")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)

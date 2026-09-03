@@ -12,10 +12,14 @@ import (
 
 const inotifyRecommended = 524288
 
+// RegisterSettings wires the settings and file-index operational endpoints.
+// Reads are open to any authenticated user (the UI's search page shows
+// them); writes and rescans change global state and are admin-only.
 func RegisterSettings(e *echo.Echo, d *Deps) {
+	admin := AdminOnly(d.UserServiceURL)
 	e.GET("/v1/search/settings", getSettings(d))
-	e.PUT("/v1/search/settings", putSettings(d))
-	e.POST("/v1/search/fileindex/rescan", postRescan(d))
+	e.PUT("/v1/search/settings", putSettings(d), admin)
+	e.POST("/v1/search/fileindex/rescan", postRescan(d), admin)
 	e.GET("/v1/search/fileindex/status", getFileindexStatus(d))
 }
 

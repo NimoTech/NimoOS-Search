@@ -10,10 +10,11 @@ func Healthz(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// RegisterInternal wires the localhost-only operational endpoints. NOT
-// registered to Gateway.
+// RegisterInternal wires the localhost-only operational endpoints. The
+// Gateway refuses to proxy any /_internal/ path; LocalhostOnly is the
+// in-service backstop for a caller that reaches the port directly.
 func RegisterInternal(e *echo.Echo, d *Deps) {
-	g := e.Group("/v1/search/_internal")
+	g := e.Group("/v1/search/_internal", LocalhostOnly)
 	g.GET("/health", getInternalHealth(d))
 	g.GET("/stats", getInternalStats(d))
 	g.POST("/warm", postInternalWarm(d))
@@ -36,9 +37,9 @@ func getInternalStats(d *Deps) echo.HandlerFunc {
 		// Real KPIs come from the eventbus rolling stats (T25). MVP stats
 		// endpoint reports a static snapshot of zero values.
 		return c.JSON(http.StatusOK, map[string]any{
-			"cache":            map[string]any{"hit_rate": 0.0},
-			"rerank_fallback":  map[string]any{"rate": 0.0},
-			"query_latency_p95": map[string]any{"with_rerank_ms": 0, "without_rerank_ms": 0},
+			"cache":                 map[string]any{"hit_rate": 0.0},
+			"rerank_fallback":       map[string]any{"rate": 0.0},
+			"query_latency_p95":     map[string]any{"with_rerank_ms": 0, "without_rerank_ms": 0},
 			"tool_calls_per_minute": 0,
 		})
 	}
