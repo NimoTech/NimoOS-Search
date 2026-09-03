@@ -109,30 +109,61 @@ type QdrantSearchRequest struct {
 	Limit      int
 }
 
-// SearchTextHybrid runs Qdrant hybrid search (dense + sparse via prefetch).
-// MVP uses a simple weighted RRF fuse via Qdrant's native query API.
-func (c *QdrantClient) SearchTextHybrid(ctx context.Context, req QdrantSearchRequest) ([]QdrantHit, error) {
-	queryReq := &pb.QueryPoints{
+// hybridPrefetchFactor sizes each fusion leg relative to the final limit.
+// RRF only ranks points that appear in at least one leg, so each leg fetches
+// a few times top_k to give the fused list enough overlap to be meaningful.
+const hybridPrefetchFactor = 3
+
+// buildHybridQuery shapes the Qdrant query for SearchTextHybrid.
+//
+// Dense and sparse are fused with Reciprocal Rank Fusion as *peers*: each is
+// a prefetch leg and the top-level query is Fusion(RRF). The previous shape
+// prefetched sparse only and re-scored that set with dense, which made the
+// sparse leg a hard gate: a strong dense-only match outside the sparse top-N
+// could never be returned. Every leg carries the request filter — an
+// unfiltered prefetch draws its top-N from the whole collection and only
+// then intersects with root_ids/kind/mime, so scoped queries came back
+// empty far too often (and the scope filter must never depend on a later
+// stage to be applied). Without a sparse vector the query is a plain
+// filtered dense nearest search.
+func buildHybridQuery(req QdrantSearchRequest) *pb.QueryPoints {
+	filter := buildPBFilter(req.Filter)
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 1
+	}
+	q := &pb.QueryPoints{
 		CollectionName: req.Collection,
-		Limit:          uint64ptr(uint64(req.Limit)),
+		Limit:          uint64ptr(uint64(limit)),
 		WithPayload:    &pb.WithPayloadSelector{SelectorOptions: &pb.WithPayloadSelector_Enable{Enable: true}},
-		Filter:         buildPBFilter(req.Filter),
+		Filter:         filter,
 	}
-	if req.Sparse != nil {
-		// Prefetch sparse then rerank with dense.
-		queryReq.Prefetch = []*pb.PrefetchQuery{{
-			Query: &pb.Query{Variant: &pb.Query_Nearest{Nearest: &pb.VectorInput{
-				Variant: &pb.VectorInput_Sparse{Sparse: &pb.SparseVector{
-					Indices: uint32SliceFromInt(req.Sparse.Indices),
-					Values:  req.Sparse.Values,
-				}}}}},
-			Using: stringPtr("bm25"),
-			Limit: uint64ptr(uint64(req.Limit * 2)),
-		}}
-	}
-	queryReq.Query = &pb.Query{Variant: &pb.Query_Nearest{Nearest: &pb.VectorInput{
+	dense := &pb.Query{Variant: &pb.Query_Nearest{Nearest: &pb.VectorInput{
 		Variant: &pb.VectorInput_Dense{Dense: &pb.DenseVector{Data: req.Dense}}}}}
-	queryReq.Using = stringPtr("dense")
+	if req.Sparse == nil {
+		q.Query = dense
+		q.Using = stringPtr("dense")
+		return q
+	}
+	legLimit := uint64ptr(uint64(limit * hybridPrefetchFactor))
+	sparse := &pb.Query{Variant: &pb.Query_Nearest{Nearest: &pb.VectorInput{
+		Variant: &pb.VectorInput_Sparse{Sparse: &pb.SparseVector{
+			Indices: uint32SliceFromInt(req.Sparse.Indices),
+			Values:  req.Sparse.Values,
+		}}}}}
+	q.Prefetch = []*pb.PrefetchQuery{
+		{Query: dense, Using: stringPtr("dense"), Limit: legLimit, Filter: filter},
+		{Query: sparse, Using: stringPtr("bm25"), Limit: legLimit, Filter: filter},
+	}
+	q.Query = &pb.Query{Variant: &pb.Query_Fusion{Fusion: pb.Fusion_RRF}}
+	return q
+}
+
+// SearchTextHybrid runs the fused dense+sparse search (see buildHybridQuery)
+// and returns hits in fused rank order. Score is the RRF score when a sparse
+// vector is present, else the dense similarity.
+func (c *QdrantClient) SearchTextHybrid(ctx context.Context, req QdrantSearchRequest) ([]QdrantHit, error) {
+	queryReq := buildHybridQuery(req)
 	resp, err := c.points.Query(ctx, queryReq)
 	if err != nil {
 		return nil, err
