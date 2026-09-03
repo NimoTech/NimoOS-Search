@@ -34,7 +34,7 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 		},
 		map[string]any{
 			"name":        "read_file_chunk",
-			"description": "Fetch the chunk at (file_id, kind, chunk_no) plus a small window of neighboring chunks.",
+			"description": "Fetch the chunk at (file_id, kind, chunk_no) plus a small window of neighboring chunks. Set parent=true to get the whole section (all chunks sharing the hit's parent_id) instead of a window.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -42,6 +42,7 @@ func (a *AgentTools) ToolsSchema() map[string]any {
 					"kind":     map[string]any{"type": "string", "enum": []string{"body", "ocr", "caption", "transcript", "summary"}},
 					"chunk_no": map[string]any{"type": "integer"},
 					"window":   map[string]any{"type": "integer", "default": 2, "maximum": 5},
+					"parent":   map[string]any{"type": "boolean", "default": false, "description": "Return the chunk's whole section (by parent_id) instead of a ±window."},
 				},
 				"required": []string{"file_id", "kind", "chunk_no"},
 			},
@@ -75,6 +76,7 @@ func (a *AgentTools) FiltersSchema() map[string]any {
 const (
 	AgentMaxPaths       = 3
 	AgentMaxPreviewChar = 200
+	AgentMaxChunkWindow = 5
 )
 
 // Invoke dispatches an agent tool by name. allowedRoots is the result of
@@ -112,9 +114,27 @@ func (a *AgentTools) Invoke(ctx context.Context, name string,
 		if v, ok := args["chunk_no"].(float64); ok {
 			chunkNo = int(v)
 		}
+		if parent, _ := args["parent"].(bool); parent {
+			out, err := a.Authz.GetParentChunks(ctx, fileID, kind, chunkNo, allowedRoots)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{
+				"file_id": out.FileID, "kind": out.Kind, "parent_id": out.ParentID,
+				"section": out.Section, "anchor_chunk_no": out.AnchorChunkNo, "chunks": out.Chunks,
+			}, nil
+		}
 		window := 2
 		if v, ok := args["window"].(float64); ok {
 			window = int(v)
+		}
+		// The schema advertises max 5; enforce it here too — window=9999
+		// used to return every chunk of the file into the model's context.
+		if window < 0 {
+			window = 0
+		}
+		if window > AgentMaxChunkWindow {
+			window = AgentMaxChunkWindow
 		}
 		out, err := a.Authz.GetChunkWindow(ctx, fileID, kind, chunkNo, window, allowedRoots)
 		if err != nil {
@@ -200,13 +220,16 @@ func trimHits(r *SearchResponse) []any {
 			}
 		}
 		hits = append(hits, map[string]any{
-			"score":   h.Score,
-			"file_id": h.FileID,
-			"paths":   paths,
-			"mime":    h.Mime,
-			"kind":    h.Kind,
-			"cite":    h.Cite,
-			"preview": map[string]any{"text": text, "thumbnail_url": nil},
+			"score":         h.Score,
+			"file_id":       h.FileID,
+			"paths":         paths,
+			"mime":          h.Mime,
+			"kind":          h.Kind,
+			"cite":          h.Cite,
+			"parent_id":     h.ParentID,
+			"section":       h.Section,
+			"merged_chunks": h.MergedChunks,
+			"preview":       map[string]any{"text": text, "thumbnail_url": nil},
 		})
 	}
 	return hits

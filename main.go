@@ -136,11 +136,13 @@ func newCache(cfg config.Config) *service.EmbedCache {
 func newSearchService(p *service.ParserClient, q *service.QdrantClient, ph *service.PhotosClient, ca *service.EmbedCache, cfg config.Config) *service.SearchService {
 	return &service.SearchService{
 		Parser: p, Qdrant: q, Photos: ph, Cache: ca,
-		ParserVersion:      "parser/0.1.0",
-		DefaultTopK:        cfg.DefaultTopK,
-		MaxTopK:            cfg.MaxTopK,
-		RerankerCandidates: cfg.RerankerCandidates,
-		RerankerDisabled:   !cfg.RerankerEnabled,
+		ParserVersion:       "parser/0.1.0",
+		DefaultTopK:         cfg.DefaultTopK,
+		MaxTopK:             cfg.MaxTopK,
+		RerankerCandidates:  cfg.RerankerCandidates,
+		RerankerDisabled:    !cfg.RerankerEnabled,
+		ParentMergeDisabled: !cfg.ParentMergeEnabled,
+		ParentMergeMaxChars: cfg.ParentMergeMaxChars,
 	}
 }
 

@@ -46,7 +46,14 @@ type Hit struct {
 	Cite         Cite           `json:"cite"`
 	Preview      Preview        `json:"preview"`
 	PayloadExtra map[string]any `json:"payload_extra"`
-	PointID      string         `json:"-"` // internal, used for rerank pairing
+	// ParentID / Section identify the section (heading or code block) the
+	// chunk came from — Parser payload since parser/0.3.0. MergedChunks is
+	// how many ranked chunks of that section were folded into this hit
+	// (1 = a single chunk). Empty ParentID means a pre-0.3.0 chunk.
+	ParentID     string `json:"parent_id,omitempty"`
+	Section      string `json:"section,omitempty"`
+	MergedChunks int    `json:"merged_chunks,omitempty"`
+	PointID      string `json:"-"` // internal, used for rerank pairing
 }
 
 type Cite struct {
@@ -114,6 +121,13 @@ type SearchService struct {
 	// RerankerDisabled is the operator kill-switch (config RerankerEnabled =
 	// false). Zero value keeps reranking on.
 	RerankerDisabled bool
+	// Parent merge (auto-merge retrieval): ranked chunks that share a
+	// parent_id are folded into one section-level hit at the rank of the
+	// best chunk, text in document order. ParentMergeMaxChars caps the
+	// merged preview (0 → DefaultParentMergeMaxChars); ParentMergeDisabled
+	// keeps every chunk separate.
+	ParentMergeDisabled bool
+	ParentMergeMaxChars int
 
 	// mimeCache memoises the facet over payload.mime that mime_prefix
 	// expansion needs; see knownMimes.
@@ -266,6 +280,11 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 			sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].Score > ranked[j].Score })
 			hits = append(ranked, unranked...)
 		}
+	}
+
+	// 4. Fold chunks of one section into a section-level hit (item C).
+	if !s.ParentMergeDisabled {
+		hits = mergeParents(hits, s.ParentMergeMaxChars)
 	}
 
 	// 4b. Either group into file-level results, or truncate to top_k chunks.
@@ -470,6 +489,8 @@ func buildHitFromPayload(qh QdrantHit) Hit {
 		v := asInt64(p["frame_ms_end"])
 		cite.FrameMsEnd = &v
 	}
+	parentID, _ := p["parent_id"].(string)
+	section, _ := p["section"].(string)
 	return Hit{
 		RawScore:     float64(qh.Score),
 		Score:        float64(qh.Score),
@@ -480,8 +501,92 @@ func buildHitFromPayload(qh QdrantHit) Hit {
 		Cite:         cite,
 		Preview:      Preview{Text: text},
 		PayloadExtra: map[string]any{},
+		ParentID:     parentID,
+		Section:      section,
+		MergedChunks: 1,
 		PointID:      qh.PointID,
 	}
+}
+
+// DefaultParentMergeMaxChars bounds a merged section preview (~1.5k tokens):
+// enough to answer from, small enough to keep responses and rerank inputs
+// predictable.
+const DefaultParentMergeMaxChars = 6000
+
+// mergeParents folds ranked chunks that share a parent_id into one hit per
+// section. The section takes the rank, Score and RawScore of its best chunk;
+// the preview is the members' text in chunk order (capped at maxChars —
+// members beyond the cap are still folded away, so a section never occupies
+// two result slots); Cite spans the members' offsets and points at the first
+// chunk. Chunks without a parent_id (pre-0.3.0 payloads) are left alone.
+func mergeParents(hits []Hit, maxChars int) []Hit {
+	if maxChars <= 0 {
+		maxChars = DefaultParentMergeMaxChars
+	}
+	type group struct {
+		idx     int
+		members []Hit
+	}
+	out := make([]Hit, 0, len(hits))
+	groups := map[string]*group{}
+	for _, h := range hits {
+		if h.ParentID == "" {
+			out = append(out, h)
+			continue
+		}
+		key := h.FileID + "\x00" + h.Kind + "\x00" + h.ParentID
+		if g, ok := groups[key]; ok {
+			g.members = append(g.members, h)
+			continue
+		}
+		groups[key] = &group{idx: len(out), members: []Hit{h}}
+		out = append(out, h)
+	}
+	for _, g := range groups {
+		if len(g.members) < 2 {
+			continue
+		}
+		best := g.members[0] // rank order: first member is the best-ranked
+		sort.SliceStable(g.members, func(i, j int) bool { return g.members[i].Cite.ChunkNo < g.members[j].Cite.ChunkNo })
+		merged := best
+		merged.MergedChunks = len(g.members)
+		merged.Cite = g.members[0].Cite
+		var text strings.Builder
+		for _, m := range g.members {
+			if m.Score > merged.Score {
+				merged.Score = m.Score
+			}
+			if m.RawScore > merged.RawScore {
+				merged.RawScore = m.RawScore
+			}
+			if m.Cite.OffsetStart != nil && (merged.Cite.OffsetStart == nil || *m.Cite.OffsetStart < *merged.Cite.OffsetStart) {
+				v := *m.Cite.OffsetStart
+				merged.Cite.OffsetStart = &v
+			}
+			if m.Cite.OffsetEnd != nil && (merged.Cite.OffsetEnd == nil || *m.Cite.OffsetEnd > *merged.Cite.OffsetEnd) {
+				v := *m.Cite.OffsetEnd
+				merged.Cite.OffsetEnd = &v
+			}
+			if m.Preview.Text == nil || *m.Preview.Text == "" {
+				continue
+			}
+			sep := 0
+			if text.Len() > 0 {
+				sep = 1
+			}
+			if text.Len()+sep+len(*m.Preview.Text) > maxChars {
+				continue
+			}
+			if sep == 1 {
+				text.WriteByte('\n')
+			}
+			text.WriteString(*m.Preview.Text)
+		}
+		t := text.String()
+		merged.Preview.Text = &t
+		out[g.idx] = merged
+	}
+	return out
 }
 
 func stringOrNilFromAny(v any) *string {
