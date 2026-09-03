@@ -46,3 +46,25 @@ func TestNimoOSClient_SearchRoots_CacheExpiry(t *testing.T) {
 	_, _ = c.SearchRoots(context.Background(), "u1")
 	require.Equal(t, 2, calls)
 }
+
+func TestNimoOSClient_SearchRootPaths_FromRootsField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"root_ids":["aabb","photos"],"roots":[{"root_id":"aabb","path":"/DATA/docs"},{"root_id":"photos","path":""}]}`))
+	}))
+	defer srv.Close()
+	c := NewNimoOSClient(NewBaseURLSource("", srv.URL), time.Minute)
+	paths, err := c.SearchRootPaths(context.Background(), "u1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"/DATA/docs"}, paths, "virtual roots without a path are skipped")
+}
+
+func TestNimoOSClient_SearchRootPaths_OldCoreWithoutRootsField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"root_ids":["aabb"]}`))
+	}))
+	defer srv.Close()
+	c := NewNimoOSClient(NewBaseURLSource("", srv.URL), time.Minute)
+	paths, err := c.SearchRootPaths(context.Background(), "u1")
+	require.ErrorIs(t, err, ErrRootPathsUnavailable, "an old core that cannot tell us paths must not be mistaken for 'no roots'")
+	require.Nil(t, paths)
+}

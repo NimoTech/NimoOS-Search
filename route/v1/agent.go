@@ -47,7 +47,7 @@ func postAgentTool(d *Deps) echo.HandlerFunc {
 			// produced by ApplyScope below.) See spec 2026-05-29.
 			return echo.NewHTTPError(http.StatusBadRequest, "X-NimoOS-User-ID required")
 		}
-		var allowedRoots []string
+		var allowedRoots, allowedRootPaths []string
 		if d.NimoOS != nil {
 			var err error
 			allowedRoots, err = d.NimoOS.SearchRoots(c.Request().Context(), uid)
@@ -55,12 +55,23 @@ func postAgentTool(d *Deps) echo.HandlerFunc {
 				return echo.NewHTTPError(http.StatusServiceUnavailable,
 					"unable to determine user roots: "+err.Error())
 			}
+			// Paths scope the filename index. A core too old to report them is
+			// not an outage: leave nil so the filenames source fails closed with
+			// a warning while semantic/images/notes still answer.
+			allowedRootPaths, err = d.NimoOS.SearchRootPaths(c.Request().Context(), uid)
+			if err != nil && !errors.Is(err, service.ErrRootPathsUnavailable) {
+				return echo.NewHTTPError(http.StatusServiceUnavailable,
+					"unable to determine user root paths: "+err.Error())
+			}
+			if err != nil {
+				allowedRootPaths = nil
+			}
 		}
 		if body.Arguments == nil {
 			body.Arguments = map[string]any{}
 		}
 		body.Arguments["__user_id"] = uid
-		result, err := d.Tools.Invoke(c.Request().Context(), body.Name, body.Arguments, allowedRoots)
+		result, err := d.Tools.Invoke(c.Request().Context(), body.Name, body.Arguments, allowedRoots, allowedRootPaths)
 		if errors.Is(err, service.ErrFileNotInScope) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found")
 		}

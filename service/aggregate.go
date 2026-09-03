@@ -8,8 +8,10 @@ import (
 )
 
 // FileNameSearcher is satisfied by *fileindex.Index (nil if disabled).
+// Only the scoped entry point is exposed here so the aggregator cannot query
+// the filename index outside the caller's granted root paths.
 type FileNameSearcher interface {
-	Search(ctx context.Context, query string, topK int) ([]fileindex.FileNameHit, error)
+	SearchWithin(ctx context.Context, query string, topK int, scope []string) ([]fileindex.FileNameHit, error)
 	Status() string
 }
 
@@ -37,7 +39,12 @@ type AggregateRequest struct {
 	Sources      []string // empty → falls back to SettingsStore.DefaultSources
 	Filters      *Filters
 	AllowedRoots []string
-	UserID       string
+	// AllowedRootPaths are the filesystem paths of AllowedRoots; the filename
+	// index is scoped by path. nil means "unknown" (core too old to report
+	// paths) and the filenames source fails closed with a warning; an empty
+	// non-nil slice means the user has no roots and yields no filename hits.
+	AllowedRootPaths []string
+	UserID           string
 }
 
 type AggregateGroups struct {
@@ -120,7 +127,14 @@ func (a *Aggregator) Aggregate(ctx context.Context, req AggregateRequest) *Aggre
 	}
 	if wants(sources, "filenames") && a.FileIndex != nil {
 		g.Go(func() error {
-			h, err := a.FileIndex.Search(ctx, req.Query, st.FilenameTopK)
+			if req.AllowedRootPaths == nil {
+				fileWarn = "filenames_scope_unavailable"
+				return nil
+			}
+			if len(req.AllowedRootPaths) == 0 {
+				return nil // no granted roots → no filename hits (fail closed)
+			}
+			h, err := a.FileIndex.SearchWithin(ctx, req.Query, st.FilenameTopK, req.AllowedRootPaths)
 			if err != nil {
 				fileWarn = "filenames_unavailable"
 				return nil

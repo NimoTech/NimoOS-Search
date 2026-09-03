@@ -81,3 +81,7 @@ type stubNimoOSE2E struct{ roots []string }
 func (s *stubNimoOSE2E) SearchRoots(ctx context.Context, uid string) ([]string, error) {
 	return s.roots, nil
 }
+
+func (s *stubNimoOSE2E) SearchRootPaths(ctx context.Context, uid string) ([]string, error) {
+	return []string{"/"}, nil
+}
