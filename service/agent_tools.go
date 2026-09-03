@@ -78,10 +78,12 @@ const (
 )
 
 // Invoke dispatches an agent tool by name. allowedRoots is the result of
-// NimoOSClient.SearchRoots(ctx, user_id) — route handler injects it so the
-// tool invocation itself can't escape root scope.
+// NimoOSClient.SearchRoots(ctx, user_id) and allowedRootPaths the matching
+// SearchRootPaths — the route handler injects both so the tool invocation
+// itself can't escape root scope (ids gate Qdrant, paths gate the filename
+// index; nil paths make the filenames source fail closed).
 func (a *AgentTools) Invoke(ctx context.Context, name string,
-	args map[string]any, allowedRoots []string) (any, error) {
+	args map[string]any, allowedRoots, allowedRootPaths []string) (any, error) {
 	switch name {
 	case "nimoos_search":
 		query, _ := args["query"].(string)
@@ -100,7 +102,7 @@ func (a *AgentTools) Invoke(ctx context.Context, name string,
 		uid, _ := args["__user_id"].(string) // optional; route may inject
 		return a.Agg.Aggregate(ctx, AggregateRequest{
 			Query: query, Sources: sources, Filters: f,
-			AllowedRoots: allowedRoots, UserID: uid,
+			AllowedRoots: allowedRoots, AllowedRootPaths: allowedRootPaths, UserID: uid,
 		}), nil
 	case "read_file_chunk":
 		// unchanged

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -23,9 +24,16 @@ type NimoOSClient struct {
 }
 
 type nimoosRootsCacheEntry struct {
-	roots []string
-	exp   time.Time
+	roots      []string
+	paths      []string // filesystem paths of the granted roots (virtual roots omitted)
+	pathsKnown bool     // false when core predates the "roots" field
+	exp        time.Time
 }
+
+// ErrRootPathsUnavailable is returned by SearchRootPaths when core answered
+// with root_ids only (an older build without the "roots" field). Callers must
+// fail closed rather than treat it as "no roots".
+var ErrRootPathsUnavailable = errors.New("nimoos search-roots: root paths unavailable (core too old)")
 
 func NewNimoOSClient(src *BaseURLSource, cacheTTL time.Duration) *NimoOSClient {
 	return &NimoOSClient{
@@ -39,10 +47,31 @@ func NewNimoOSClient(src *BaseURLSource, cacheTTL time.Duration) *NimoOSClient {
 // SearchRoots returns the root_ids the given user is authorized to access,
 // cached per userID for cacheTTL.
 func (c *NimoOSClient) SearchRoots(ctx context.Context, userID string) ([]string, error) {
+	e, err := c.entry(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return e.roots, nil
+}
+
+// SearchRootPaths returns the filesystem paths of the user's granted roots
+// (same fetch/cache as SearchRoots). Used to scope the filename index.
+func (c *NimoOSClient) SearchRootPaths(ctx context.Context, userID string) ([]string, error) {
+	e, err := c.entry(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !e.pathsKnown {
+		return nil, ErrRootPathsUnavailable
+	}
+	return e.paths, nil
+}
+
+func (c *NimoOSClient) entry(ctx context.Context, userID string) (nimoosRootsCacheEntry, error) {
 	c.mu.RLock()
 	if e, ok := c.cache[userID]; ok && time.Now().Before(e.exp) {
 		c.mu.RUnlock()
-		return e.roots, nil
+		return e, nil
 	}
 	c.mu.RUnlock()
 
@@ -53,21 +82,31 @@ func (c *NimoOSClient) SearchRoots(ctx context.Context, userID string) ([]string
 			base+"/v1/nimoos/search-roots?"+q.Encode(), nil)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("nimoos search-roots: %w", err)
+		return nimoosRootsCacheEntry{}, fmt.Errorf("nimoos search-roots: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("nimoos search-roots %d", resp.StatusCode)
+		return nimoosRootsCacheEntry{}, fmt.Errorf("nimoos search-roots %d", resp.StatusCode)
 	}
 	var out struct {
 		RootIDs []string `json:"root_ids"`
+		Roots   []struct {
+			RootID string `json:"root_id"`
+			Path   string `json:"path"`
+		} `json:"roots"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+		return nimoosRootsCacheEntry{}, err
 	}
 
+	e := nimoosRootsCacheEntry{roots: out.RootIDs, pathsKnown: out.Roots != nil, exp: time.Now().Add(c.cacheTTL)}
+	for _, r := range out.Roots {
+		if r.Path != "" {
+			e.paths = append(e.paths, r.Path)
+		}
+	}
 	c.mu.Lock()
-	c.cache[userID] = nimoosRootsCacheEntry{roots: out.RootIDs, exp: time.Now().Add(c.cacheTTL)}
+	c.cache[userID] = e
 	c.mu.Unlock()
-	return out.RootIDs, nil
+	return e, nil
 }

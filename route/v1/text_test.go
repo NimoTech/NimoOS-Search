@@ -13,10 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type stubNimoOS struct{ roots []string }
+type stubNimoOS struct {
+	roots    []string
+	paths    []string
+	pathsErr error
+}
 
 func (s *stubNimoOS) SearchRoots(ctx context.Context, uid string) ([]string, error) {
 	return s.roots, nil
+}
+
+func (s *stubNimoOS) SearchRootPaths(ctx context.Context, uid string) ([]string, error) {
+	return s.paths, s.pathsErr
 }
 
 func TestPostSearchText_HappyPath(t *testing.T) {

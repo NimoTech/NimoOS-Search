@@ -44,7 +44,7 @@ func TestAgentInvoke_nimoosSearch_ReturnsGroups(t *testing.T) {
 	agg := &Aggregator{Search: search, Settings: st}
 	tools := &AgentTools{Agg: agg}
 	out, err := tools.Invoke(context.Background(), "nimoos_search",
-		map[string]any{"query": "hi"}, []string{"r1"})
+		map[string]any{"query": "hi"}, []string{"r1"}, []string{"/"})
 	require.NoError(t, err)
 	resp := out.(*AggregateResponse)
 	require.Len(t, resp.Groups.Semantic, 1)
@@ -88,7 +88,7 @@ func TestAgentInvoke_readDocument_ReturnsStitchedText(t *testing.T) {
 	}}
 	tools := &AgentTools{Authz: &AuthzService{Qdrant: q}}
 	out, err := tools.Invoke(context.Background(), "read_document",
-		map[string]any{"file_id": "f1"}, []string{"r1"})
+		map[string]any{"file_id": "f1"}, []string{"r1"}, nil)
 	require.NoError(t, err)
 	m := out.(map[string]any)
 	require.Equal(t, "f1", m["file_id"])

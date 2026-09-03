@@ -26,4 +26,7 @@ type Deps struct {
 // service), see Task 8.
 type RootAuthorizer interface {
 	SearchRoots(ctx context.Context, userID string) ([]string, error)
+	// SearchRootPaths returns the filesystem paths of the same roots; may
+	// return service.ErrRootPathsUnavailable when core predates the field.
+	SearchRootPaths(ctx context.Context, userID string) ([]string, error)
 }

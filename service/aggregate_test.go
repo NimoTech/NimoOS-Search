@@ -11,11 +11,19 @@ import (
 )
 
 type fakeFileSearcher struct {
-	hits []fileindex.FileNameHit
-	err  error
+	hits      []fileindex.FileNameHit
+	err       error
+	gotScope  *[]string // records the scope the aggregator passed
+	scopeSeen *bool
 }
 
-func (f fakeFileSearcher) Search(context.Context, string, int) ([]fileindex.FileNameHit, error) {
+func (f fakeFileSearcher) SearchWithin(_ context.Context, _ string, _ int, scope []string) ([]fileindex.FileNameHit, error) {
+	if f.gotScope != nil {
+		*f.gotScope = scope
+	}
+	if f.scopeSeen != nil {
+		*f.scopeSeen = true
+	}
 	return f.hits, f.err
 }
 func (f fakeFileSearcher) Status() string { return "ready" }
@@ -49,7 +57,7 @@ func TestAggregate_AllThreeGroups(t *testing.T) {
 		fakeFileSearcher{hits: []fileindex.FileNameHit{{Path: "/DATA/x.pdf", Name: "x.pdf"}}},
 		fakeImageSearcher{hits: []ImageHit{{AssetID: "a1", Name: "p.jpg"}}},
 	)
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 	require.Len(t, resp.Groups.Semantic, 1)
 	require.Len(t, resp.Groups.Filenames, 1)
 	require.Len(t, resp.Groups.Images, 1)
@@ -62,7 +70,7 @@ func TestAggregate_SourcesNarrowing(t *testing.T) {
 		fakeFileSearcher{hits: []fileindex.FileNameHit{{Path: "/DATA/x.pdf"}}},
 		fakeImageSearcher{hits: []ImageHit{{AssetID: "a1"}}},
 	)
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", Sources: []string{"images"}, AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", Sources: []string{"images"}, AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 	require.Empty(t, resp.Groups.Semantic)
 	require.Empty(t, resp.Groups.Filenames)
 	require.Len(t, resp.Groups.Images, 1)
@@ -73,7 +81,7 @@ func TestAggregate_ImageFailureDegrades(t *testing.T) {
 		fakeFileSearcher{hits: []fileindex.FileNameHit{{Path: "/DATA/x.pdf"}}},
 		fakeImageSearcher{err: errors.New("photos down")},
 	)
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 	require.Empty(t, resp.Groups.Images)
 	require.Contains(t, resp.Warnings, "images_unavailable")
 	require.Len(t, resp.Groups.Filenames, 1, "other groups unaffected")
@@ -81,7 +89,7 @@ func TestAggregate_ImageFailureDegrades(t *testing.T) {
 
 func TestAggregate_NilDependenciesSkip(t *testing.T) {
 	agg := newAggForTest(nil, nil)
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 	require.Len(t, resp.Groups.Semantic, 1)
 	require.Empty(t, resp.Groups.Filenames)
 	require.Empty(t, resp.Groups.Images)
@@ -139,7 +147,7 @@ func TestAggregate_PhotosRootPassesScope(t *testing.T) {
 
 func TestAggregate_NoAccessibleRootsWarns(t *testing.T) {
 	agg := newAggForTest(nil, nil)
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{}, AllowedRootPaths: []string{}})
 	require.Empty(t, resp.Groups.Semantic)
 	require.Contains(t, resp.Warnings, "no_accessible_roots")
 }
@@ -153,7 +161,7 @@ func TestAggregate_ReadsLiveSettings(t *testing.T) {
 	cur := agg.Settings.Get()
 	cur.DefaultSources = []string{"images"}
 	agg.Settings.cur = cur
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 	require.Empty(t, resp.Groups.Semantic, "DefaultSources=[images] → semantic skipped when request omits sources")
 	require.Len(t, resp.Groups.Images, 1)
 }
@@ -209,7 +217,7 @@ func TestAggregate_ImagesCarryCaption(t *testing.T) {
 	}})
 	agg.Captions = &fakeCaptions{m: map[string]string{"a1": "A large dam across a river valley"}}
 
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 
 	require.Len(t, resp.Groups.Images, 2)
 	byID := map[string]ImageHit{}
@@ -227,7 +235,7 @@ func TestAggregate_ImagesCaptionFailOpen(t *testing.T) {
 	}})
 	agg.Captions = &fakeCaptions{err: errors.New("qdrant down")}
 
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 
 	require.Len(t, resp.Groups.Images, 2, "fail-open: a caption query failure must not affect the hit count")
 	for _, h := range resp.Groups.Images {
@@ -243,7 +251,7 @@ func TestAggregate_ImagesCaptionTruncated(t *testing.T) {
 	agg := newAggForTest(nil, fakeImageSearcher{hits: []ImageHit{{AssetID: "a1", Name: "dam.jpg"}}})
 	agg.Captions = &fakeCaptions{m: map[string]string{"a1": long}}
 
-	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}})
+	resp := agg.Aggregate(context.Background(), AggregateRequest{Query: "x", AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/"}})
 
 	require.Len(t, resp.Groups.Images, 1)
 	caption := resp.Groups.Images[0].Caption
@@ -254,4 +262,41 @@ func TestAggregate_ImagesCaptionTruncated(t *testing.T) {
 
 func (c *capturingQdrant) DistinctValues(context.Context, string, string) ([]string, error) {
 	return nil, nil
+}
+
+func TestAggregate_FilenamesScopedToGrantedRootPaths(t *testing.T) {
+	var got []string
+	fi := fakeFileSearcher{hits: []fileindex.FileNameHit{{Path: "/DATA/docs/a.txt", Name: "a.txt"}}, gotScope: &got}
+	agg := newAggForTest(fi, nil)
+	resp := agg.Aggregate(context.Background(), AggregateRequest{
+		Query: "a", Sources: []string{"filenames"},
+		AllowedRoots: []string{"r1"}, AllowedRootPaths: []string{"/DATA/docs"}, UserID: "u1",
+	})
+	require.Equal(t, []string{"/DATA/docs"}, got, "filename search must be limited to the caller's granted root paths")
+	require.Len(t, resp.Groups.Filenames, 1)
+}
+
+func TestAggregate_FilenamesFailClosedWhenRootPathsUnknown(t *testing.T) {
+	// Core too old to report paths (AllowedRootPaths nil): return no filename
+	// hits and say why, instead of searching the whole index.
+	seen := false
+	fi := fakeFileSearcher{hits: []fileindex.FileNameHit{{Path: "/DATA/x.txt", Name: "x.txt"}}, scopeSeen: &seen}
+	agg := newAggForTest(fi, nil)
+	resp := agg.Aggregate(context.Background(), AggregateRequest{
+		Query: "x", Sources: []string{"filenames"}, AllowedRoots: []string{"r1"}, UserID: "u1",
+	})
+	require.False(t, seen, "index must not be queried without a scope")
+	require.Empty(t, resp.Groups.Filenames)
+	require.Contains(t, resp.Warnings, "filenames_scope_unavailable")
+}
+
+func TestAggregate_FilenamesEmptyWhenUserHasNoRoots(t *testing.T) {
+	seen := false
+	fi := fakeFileSearcher{hits: []fileindex.FileNameHit{{Path: "/DATA/x.txt", Name: "x.txt"}}, scopeSeen: &seen}
+	agg := newAggForTest(fi, nil)
+	resp := agg.Aggregate(context.Background(), AggregateRequest{
+		Query: "x", Sources: []string{"filenames"}, AllowedRoots: nil, AllowedRootPaths: []string{}, UserID: "u1",
+	})
+	require.False(t, seen)
+	require.Empty(t, resp.Groups.Filenames)
 }

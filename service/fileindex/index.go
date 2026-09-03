@@ -204,14 +204,39 @@ func (i *Index) Count(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// Search returns up to topK filename hits ranked by match score then mtime.
-// Candidate retrieval uses FTS5 trigram when available, else a name_lower scan.
+// Search returns up to topK filename hits ranked by match score then mtime,
+// over the WHOLE index. It is for operational/test use; request paths must go
+// through SearchWithin so results are limited to the caller's granted roots.
 func (i *Index) Search(ctx context.Context, query string, topK int) ([]FileNameHit, error) {
+	return i.search(ctx, query, topK, nil)
+}
+
+// SearchWithin is Search restricted to files at or under any of the scope
+// paths (the caller's granted roots). An empty scope fails closed and returns
+// no hits: "no grants" must never widen to "everything".
+func (i *Index) SearchWithin(ctx context.Context, query string, topK int, scope []string) ([]FileNameHit, error) {
+	clean := make([]string, 0, len(scope))
+	for _, p := range scope {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		clean = append(clean, filepath.Clean(p))
+	}
+	if len(clean) == 0 {
+		return nil, nil
+	}
+	return i.search(ctx, query, topK, clean)
+}
+
+// search runs candidate retrieval + Go-side scoring. scope == nil means
+// unscoped; a non-nil scope is turned into a path-range predicate.
+func (i *Index) search(ctx context.Context, query string, topK int, scope []string) ([]FileNameHit, error) {
 	terms := tokenize(query)
 	if len(terms) == 0 {
 		return nil, nil
 	}
-	rows, err := i.candidateRows(ctx, terms)
+	rows, err := i.candidateRows(ctx, terms, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -245,13 +270,37 @@ func (i *Index) Search(ctx context.Context, query string, topK int) ([]FileNameH
 	return hits, nil
 }
 
+// scopePredicate builds "(path = ? OR (path >= ? AND path < ?)) OR ..." for
+// the given root paths. The half-open range [p+"/", p+"0") covers exactly the
+// subtree (ASCII '0' is the character after '/'), uses the PRIMARY KEY btree,
+// and cannot match a sibling such as /DATA/ab when the scope is /DATA/a.
+// Returns ("", nil) for an unscoped query.
+func scopePredicate(col string, scope []string) (string, []any) {
+	if scope == nil {
+		return "", nil
+	}
+	var parts []string
+	var args []any
+	for _, p := range scope {
+		p = strings.TrimRight(p, "/")
+		if p == "" {
+			p = "/" // scope is the filesystem root: everything matches
+			parts = append(parts, col+` >= '/'`)
+			continue
+		}
+		parts = append(parts, `(`+col+` = ? OR (`+col+` >= ? AND `+col+` < ?))`)
+		args = append(args, p, p+"/", p+"0")
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", args
+}
+
 // candidateRows returns rows whose name matches ANY term (final scoring/AND
-// weighting happens in Go). Selects the same columns regardless of backend.
+// weighting happens in Go), optionally restricted to scope. Selects the same
+// columns regardless of backend.
 // Note: the FTS5 trigram path requires each term to be >= 3 chars; the LIKE
 // fallback has no minimum length, so very short queries may return fewer results
 // on the FTS path than on the fallback path.
-func (i *Index) candidateRows(ctx context.Context, terms []string) (*sql.Rows, error) {
-	const cols = `path,name,name_lower,ext,size,mtime_ms,is_dir`
+func (i *Index) candidateRows(ctx context.Context, terms []string, scope []string) (*sql.Rows, error) {
 	if i.ftsOK {
 		// trigram MATCH on any term; OR-join with quoted phrases.
 		var qs []string
@@ -260,8 +309,12 @@ func (i *Index) candidateRows(ctx context.Context, terms []string) (*sql.Rows, e
 			qs = append(qs, `"`+strings.ReplaceAll(t, `"`, ``)+`"`)
 		}
 		args = append(args, strings.Join(qs, " OR "))
-		return i.db.QueryContext(ctx,
-			`SELECT f.path,f.name,f.name_lower,f.ext,f.size,f.mtime_ms,f.is_dir FROM file_name_fts m JOIN file_index f ON f.path=m.path WHERE file_name_fts MATCH ?`, args...)
+		q := `SELECT f.path,f.name,f.name_lower,f.ext,f.size,f.mtime_ms,f.is_dir FROM file_name_fts m JOIN file_index f ON f.path=m.path WHERE file_name_fts MATCH ?`
+		if pred, pargs := scopePredicate("f.path", scope); pred != "" {
+			q += ` AND ` + pred
+			args = append(args, pargs...)
+		}
+		return i.db.QueryContext(ctx, q, args...)
 	}
 	// Fallback: name_lower LIKE for any term.
 	var where []string
@@ -270,6 +323,10 @@ func (i *Index) candidateRows(ctx context.Context, terms []string) (*sql.Rows, e
 		where = append(where, `name_lower LIKE '%' || ? || '%'`)
 		args = append(args, t)
 	}
-	return i.db.QueryContext(ctx,
-		`SELECT `+cols+` FROM file_index WHERE `+strings.Join(where, " OR "), args...)
+	q := `SELECT path,name,name_lower,ext,size,mtime_ms,is_dir FROM file_index WHERE (` + strings.Join(where, " OR ") + `)`
+	if pred, pargs := scopePredicate("path", scope); pred != "" {
+		q += ` AND ` + pred
+		args = append(args, pargs...)
+	}
+	return i.db.QueryContext(ctx, q, args...)
 }
