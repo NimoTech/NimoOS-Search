@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "corpus": "synthetic example — the real set lives in the private docs repo (nimo_os_docs/eval/search/queries.json)",
+  "cases": [
+    {"id": "ex001", "query": "quarterly sales report 2026", "sources": ["semantic", "filenames"],
+     "expect": [{"path_contains": "Reports/2026-Q1-sales.pdf"}], "note": "english, exact doc"},
+    {"id": "ex002", "query": "上周拍的白板照片", "sources": ["semantic", "images"],
+     "expect": [{"path_contains": "Whiteboard/2026-08"}, {"file_id": "photos:abc123"}], "note": "caption route, zh query"},
+    {"id": "ex003", "query": "nginx 反向代理 配置示例", "sources": ["semantic"],
+     "expect": [{"path_contains": "notes/nginx-reverse-proxy.md"}]}
+  ]
+}
