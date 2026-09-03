@@ -99,11 +99,21 @@ type SearchService struct {
 	Qdrant QdrantAPI
 	// Photos resolves photos:<asset_id> hits to a file path (see
 	// expandPhotoPaths). nil disables the lookup; such hits keep paths=null.
-	Photos             PhotoAssetLookup
-	Cache              *EmbedCache
-	ParserVersion      string
-	DefaultTopK        int
+	Photos        PhotoAssetLookup
+	Cache         *EmbedCache
+	ParserVersion string
+	DefaultTopK   int
+	// MaxTopK caps a request's top_k (and therefore the Qdrant limit, the
+	// rerank input and the ExpandFiles id list). <= 0 means no cap.
+	MaxTopK int
+	// RerankerCandidates is the cross-encoder budget per query: how many of
+	// the top vector hits are reranked. It is independent of top_k — at
+	// ~1.3 s per candidate, letting top_k (20 by default) raise it silently
+	// pushed every default query past ParserTimeoutSec. <= 0 reranks all.
 	RerankerCandidates int
+	// RerankerDisabled is the operator kill-switch (config RerankerEnabled =
+	// false). Zero value keeps reranking on.
+	RerankerDisabled bool
 
 	// mimeCache memoises the facet over payload.mime that mime_prefix
 	// expansion needs; see knownMimes.
@@ -120,6 +130,9 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	if topK <= 0 {
 		topK = s.DefaultTopK
 	}
+	if s.MaxTopK > 0 && topK > s.MaxTopK {
+		topK = s.MaxTopK
+	}
 	maxChunks := req.MaxChunksPerFile
 	if maxChunks <= 0 {
 		maxChunks = 5
@@ -127,15 +140,15 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 	if maxChunks > 20 {
 		maxChunks = 20
 	}
-	candidates := s.RerankerCandidates
-	if candidates < topK {
-		candidates = topK
+	// candidates is the vector-search limit: enough to answer top_k, and at
+	// least the rerank budget so the reranker sees its full input. The rerank
+	// budget itself never grows with top_k (see RerankerCandidates).
+	candidates := topK
+	if s.RerankerCandidates > candidates {
+		candidates = s.RerankerCandidates
 	}
 	// Grouping by file needs enough chunk candidates to cover top_k files.
-	// Cap the grouping-induced growth: rerank runs over ALL candidates (see the
-	// rerank loop below), so an unbounded topK*maxChunks would blow up latency.
-	// We never SHRINK an operator-configured RerankerCandidates — only bound our
-	// own expansion at 100.
+	// Bound our own expansion at 100.
 	if req.GroupByFile {
 		want := topK * maxChunks
 		if want > 100 {
@@ -208,11 +221,22 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 		hits = append(hits, buildHitFromPayload(qh))
 	}
 
-	// 3. Rerank (with fallback)
-	if req.Rerank && len(hits) > 0 {
+	// 3. Rerank the top RerankerCandidates hits (with fallback). Hits beyond
+	//    the budget, and hits the reranker returned no score for, keep their
+	//    vector rank and are placed *behind* the reranked block: cross-encoder
+	//    scores and vector similarities are not comparable, so the two must
+	//    never be interleaved in one sort.
+	if req.Rerank && s.RerankerDisabled {
+		warnings = append(warnings, "rerank_disabled")
+	}
+	if req.Rerank && !s.RerankerDisabled && len(hits) > 0 {
+		budget := s.RerankerCandidates
+		if budget <= 0 || budget > len(hits) {
+			budget = len(hits)
+		}
 		t = time.Now()
-		cands := make([]RerankCandidate, 0, len(hits))
-		for _, h := range hits {
+		cands := make([]RerankCandidate, 0, budget)
+		for _, h := range hits[:budget] {
 			text := ""
 			if h.Preview.Text != nil {
 				text = *h.Preview.Text
@@ -223,22 +247,26 @@ func (s *SearchService) SearchText(ctx context.Context, req SearchRequest) (*Sea
 		stats.RerankMs = int(time.Since(t).Milliseconds())
 		if err != nil {
 			warnings = append(warnings, "rerank_unavailable")
-			// keep score = raw_score for all hits
+			// keep score = raw_score, vector order for all hits
 		} else {
 			scoreByID := make(map[string]float64, len(rr.Scores))
-			for _, s := range rr.Scores {
-				scoreByID[s.ID] = s.Score
+			for _, sc := range rr.Scores {
+				scoreByID[sc.ID] = sc.Score
 			}
-			for i := range hits {
-				if sc, ok := scoreByID[hits[i].PointID]; ok {
-					hits[i].Score = sc
+			ranked := make([]Hit, 0, budget)
+			unranked := make([]Hit, 0, len(hits)-budget)
+			for i, h := range hits {
+				if sc, ok := scoreByID[h.PointID]; ok && i < budget {
+					h.Score = sc
+					ranked = append(ranked, h)
+				} else {
+					unranked = append(unranked, h)
 				}
 			}
+			sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].Score > ranked[j].Score })
+			hits = append(ranked, unranked...)
 		}
 	}
-
-	// 4. Sort by Score desc.
-	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 
 	// 4b. Either group into file-level results, or truncate to top_k chunks.
 	var order []string // file IDs in rank order — only populated when grouping

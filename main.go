@@ -138,7 +138,9 @@ func newSearchService(p *service.ParserClient, q *service.QdrantClient, ph *serv
 		Parser: p, Qdrant: q, Photos: ph, Cache: ca,
 		ParserVersion:      "parser/0.1.0",
 		DefaultTopK:        cfg.DefaultTopK,
+		MaxTopK:            cfg.MaxTopK,
 		RerankerCandidates: cfg.RerankerCandidates,
+		RerankerDisabled:   !cfg.RerankerEnabled,
 	}
 }
 
