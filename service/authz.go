@@ -100,6 +100,98 @@ type ChunkContextResponse struct {
 	Chunks        []ChunkContextChunk `json:"chunks"`
 }
 
+// ParentChunksResponse is the whole section an anchor chunk belongs to.
+type ParentChunksResponse struct {
+	FileID        string              `json:"file_id"`
+	Kind          string              `json:"kind"`
+	ParentID      string              `json:"parent_id,omitempty"`
+	Section       string              `json:"section,omitempty"`
+	AnchorChunkNo int                 `json:"anchor_chunk_no"`
+	Chunks        []ChunkContextChunk `json:"chunks"`
+}
+
+// parentMaxChunks bounds a section read; sections are split by Parser at
+// target_tokens so real ones are far smaller.
+const parentMaxChunks = 50
+
+// GetParentChunks returns every chunk that shares the anchor chunk's
+// parent_id (its section), in chunk order — the "read the whole section"
+// alternative to a ±window guess. Anchors without a parent_id (pre-0.3.0
+// payloads) return just themselves. Same authz semantics as GetFileChunks.
+func (s *AuthzService) GetParentChunks(ctx context.Context, fileID, kind string,
+	chunkNo int, allowedRoots []string) (*ParentChunksResponse, error) {
+	if len(allowedRoots) == 0 {
+		return nil, ErrFileNotInScope
+	}
+	var all []QdrantHit
+	offset := ""
+	for {
+		hits, next, err := s.Qdrant.ScrollByFileID(ctx, collectionTextChunks, fileID, allowedRoots, 500, offset)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, hits...)
+		if next == "" || len(hits) == 0 {
+			break
+		}
+		offset = next
+	}
+	var anchor *QdrantHit
+	for i := range all {
+		k, _ := all[i].Payload["kind"].(string)
+		if k == kind && int(asInt64(all[i].Payload["chunk_no"])) == chunkNo {
+			anchor = &all[i]
+			break
+		}
+	}
+	if anchor == nil {
+		return nil, ErrFileNotInScope
+	}
+	parentID, _ := anchor.Payload["parent_id"].(string)
+	section, _ := anchor.Payload["section"].(string)
+	out := []ChunkContextChunk{}
+	for _, h := range all {
+		k, _ := h.Payload["kind"].(string)
+		pid, _ := h.Payload["parent_id"].(string)
+		cn := int(asInt64(h.Payload["chunk_no"]))
+		if k != kind {
+			continue
+		}
+		if parentID == "" {
+			if cn != chunkNo {
+				continue
+			}
+		} else if pid != parentID {
+			continue
+		}
+		out = append(out, chunkContextFromPayload(h.Payload, cn))
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ChunkNo < out[j].ChunkNo })
+	if len(out) > parentMaxChunks {
+		out = out[:parentMaxChunks]
+	}
+	return &ParentChunksResponse{FileID: fileID, Kind: kind, ParentID: parentID,
+		Section: section, AnchorChunkNo: chunkNo, Chunks: out}, nil
+}
+
+func chunkContextFromPayload(p map[string]any, cn int) ChunkContextChunk {
+	text, _ := p["text"].(string)
+	cc := ChunkContextChunk{ChunkNo: cn, Text: text}
+	if p["page"] != nil {
+		v := int(asInt64(p["page"]))
+		cc.Page = &v
+	}
+	if p["offset_start"] != nil {
+		v := asInt64(p["offset_start"])
+		cc.OffsetStart = &v
+	}
+	if p["offset_end"] != nil {
+		v := asInt64(p["offset_end"])
+		cc.OffsetEnd = &v
+	}
+	return cc
+}
+
 // GetChunkWindow returns chunks in [chunk_no - window, chunk_no + window]
 // for the same (file_id, kind). Same authz semantics as GetFileChunks.
 func (s *AuthzService) GetChunkWindow(ctx context.Context, fileID, kind string,

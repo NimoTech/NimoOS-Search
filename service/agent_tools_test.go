@@ -109,3 +109,36 @@ func TestAgentToolsSchema_IncludesReadDocument(t *testing.T) {
 func (f fakeQdrantA) DistinctValues(context.Context, string, string) ([]string, error) {
 	return nil, nil
 }
+
+func TestAgentInvoke_readFileChunk_ParentModeReturnsSection(t *testing.T) {
+	q := &recordingQdrant{hits: []QdrantHit{parentChunk(0, "A", "a0"), parentChunk(1, "A", "a1"), parentChunk(2, "B", "b2")}}
+	tools := &AgentTools{Authz: &AuthzService{Qdrant: q}}
+	out, err := tools.Invoke(context.Background(), "read_file_chunk",
+		map[string]any{"file_id": "f1", "kind": "body", "chunk_no": float64(1), "parent": true}, []string{"r1"}, nil)
+	require.NoError(t, err)
+	m := out.(map[string]any)
+	require.Equal(t, "A", m["parent_id"])
+	require.Len(t, m["chunks"], 2)
+}
+
+func TestAgentInvoke_readFileChunk_WindowIsClamped(t *testing.T) {
+	// The schema promises max 5; the dispatcher must enforce it too
+	// (window=9999 used to return every chunk of the file).
+	hits := []QdrantHit{}
+	for i := 0; i < 40; i++ {
+		hits = append(hits, parentChunk(i, "P", "x"))
+	}
+	tools := &AgentTools{Authz: &AuthzService{Qdrant: &recordingQdrant{hits: hits}}}
+	out, err := tools.Invoke(context.Background(), "read_file_chunk",
+		map[string]any{"file_id": "f1", "kind": "body", "chunk_no": float64(20), "window": float64(9999)}, []string{"r1"}, nil)
+	require.NoError(t, err)
+	require.Len(t, out.(map[string]any)["chunks"], 11)
+}
+
+func TestTrimHits_CarriesSectionFields(t *testing.T) {
+	r := &SearchResponse{Hits: []Hit{{FileID: "f", ParentID: "A", Section: "Guide > Setup", MergedChunks: 2}}}
+	m := trimHits(r)[0].(map[string]any)
+	require.Equal(t, "A", m["parent_id"])
+	require.Equal(t, "Guide > Setup", m["section"])
+	require.Equal(t, 2, m["merged_chunks"])
+}

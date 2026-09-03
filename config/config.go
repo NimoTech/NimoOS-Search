@@ -13,6 +13,8 @@ type Config struct {
 	RerankerCandidates   int
 	DefaultTopK          int
 	MaxTopK              int
+	ParentMergeEnabled   bool
+	ParentMergeMaxChars  int
 	EmbedCacheSize       int
 	EmbedCacheTTLSec     int
 	UserRootsCacheTTLSec int
@@ -55,8 +57,8 @@ type Config struct {
 
 func defaults() Config {
 	return Config{
-		BindHost:             "127.0.0.1",
-		RerankerEnabled:      true,
+		BindHost:        "127.0.0.1",
+		RerankerEnabled: true,
 		// 8, not 40: the reranker is CPU-bound on most NimoOS boxes (~1.3s per
 		// candidate for real chunks), and 40 candidates blew past ParserTimeoutSec
 		// so every rerank was abandoned - the query then reported
@@ -65,6 +67,8 @@ func defaults() Config {
 		RerankerCandidates:   8,
 		DefaultTopK:          20,
 		MaxTopK:              100,
+		ParentMergeEnabled:   true,
+		ParentMergeMaxChars:  6000,
 		EmbedCacheSize:       1000,
 		EmbedCacheTTLSec:     300,
 		UserRootsCacheTTLSec: 60,
@@ -133,6 +137,12 @@ func applyINI(f *ini.File, c *Config) {
 		}
 		if k, _ := s.GetKey("MaxTopK"); k != nil {
 			c.MaxTopK, _ = k.Int()
+		}
+		if k, _ := s.GetKey("ParentMergeEnabled"); k != nil {
+			c.ParentMergeEnabled, _ = k.Bool()
+		}
+		if k, _ := s.GetKey("ParentMergeMaxChars"); k != nil {
+			c.ParentMergeMaxChars, _ = k.Int()
 		}
 		if k, _ := s.GetKey("EmbedCacheSize"); k != nil {
 			c.EmbedCacheSize, _ = k.Int()
