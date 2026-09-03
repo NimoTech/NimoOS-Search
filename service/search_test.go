@@ -12,6 +12,8 @@ import (
 // fakeParser stubs ParserClient for orchestration tests
 type fakeParser struct {
 	embedCalls   int
+	rerankCalls  int
+	rerankCands  []RerankCandidate // candidates handed to the last Rerank
 	rerankErr    error
 	rerankScores []RerankScore
 	expandFiles  []FileRecord
@@ -24,6 +26,8 @@ func (f *fakeParser) Embed(ctx context.Context, model, t, text, b64 string) (*Em
 		Dim: 2, ModelVersion: "bge-m3/v1"}, nil
 }
 func (f *fakeParser) Rerank(ctx context.Context, q string, c []RerankCandidate, k *int) (*RerankResult, error) {
+	f.rerankCalls++
+	f.rerankCands = append([]RerankCandidate(nil), c...)
 	if f.rerankErr != nil {
 		return nil, f.rerankErr
 	}
